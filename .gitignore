@@ -1,0 +1,22 @@
+venv/
+.env
+__pycache__/
+.python-version
+*.pyc
+
+# Personal data
+data/candidate-context.md
+data/extended-experience.md
+data/base_resume.pdf
+data/base_resume.docx
+data/jobs.db
+data/tailored_resumes/
+
+data/*.docx
+node_modules
+*.pdf
+*.docx
+.DS_Store
+
+# Test files
+test_*.py

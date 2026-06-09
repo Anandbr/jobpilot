@@ -1,0 +1,71 @@
+{
+    "candidate": {
+        "name": "Anand Buruganahalli Rajanna",
+        "email": "buruganahallirajan.a@gmail.com",
+        "phone": "(857) 320-5882",
+        "location": "Seattle, WA",
+        "linkedin": "linkedin.com/in/anandbrajanna",
+        "github": "github.com/Anandbr",
+        "visa": "H1B",
+        "h1b_transfer_required": true
+    },
+    "job_search": {
+        "target_roles": [
+            "AI Engineer",
+            "ML Engineer",
+            "Applied AI Engineer",
+            "Agentic Engineer",
+            "Software Engineer",
+            "Backend Engineer",
+            "Senior Software Engineer"
+        ],
+        "role_keywords": [
+            "ai engineer",
+            "ml engineer",
+            "llm",
+            "python",
+            "machine learning",
+            "agentic",
+            "software engineer",
+            "backend engineer",
+            "applied ai",
+            "generative ai"
+        ],
+        "exclude_keywords": [
+            "10+ years",
+            "15+ years",
+            "phd required",
+            "principal engineer",
+            "staff engineer",
+            "us citizen only",
+            "clearance required",
+            "no sponsorship"
+        ],
+        "locations": [
+            "Remote",
+            "Seattle",
+            "San Francisco",
+            "New York",
+            "Boston"
+        ],
+        "exclude_companies": [],
+        "min_salary": 150000,
+        "min_score": 7.0,
+        "h1b_sponsorship_required": true
+    },
+    "resume": {
+        "base_resume_path": "data/base_resume.pdf",
+        "max_pages": 1,
+        "prefer_one_page": true
+    },
+    "budget": {
+        "daily_limit_usd": 1.00,
+        "alert_at_usd": 0.75,
+        "scoring_model": "claude-haiku-4-5-20251001",
+        "tailoring_model": "claude-sonnet-4-6"
+    },
+    "notifications": {
+        "telegram_enabled": true,
+        "email_enabled": false
+    }
+}
