@@ -5,21 +5,29 @@ const {
 } = require('docx');
 const fs = require('fs');
 
-const BLUE = "1F4E79";
 const DARK = "1a1a1a";
 const MED  = "333333";
-const GRAY = "666666";
+const GRAY = "555555";
+const BLUE = "1F4E79";
 const FONT = "Arial";
 
 const divider = () => new Paragraph({
-    border: { bottom: { style: BorderStyle.SINGLE, size: 7, color: BLUE, space: 1 } },
-    spacing: { before: 100, after: 50 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: BLUE, space: 1 } },
+    spacing: { before: 120, after: 60 },
     children: []
 });
 
+// Section header — no top gap, small bottom gap
 const sectionHeader = (text) => new Paragraph({
-    spacing: { before: 100, after: 40 },
-    children: [new TextRun({ text, bold: true, size: 20, color: BLUE, font: FONT, allCaps: true })]
+    spacing: { before: 60, after: 30 },
+    children: [new TextRun({
+        text,
+        bold: true,
+        size: 20,
+        color: DARK,
+        font: FONT,
+        allCaps: true
+    })]
 });
 
 const bullet = (text) => new Paragraph({
@@ -30,14 +38,33 @@ const bullet = (text) => new Paragraph({
 
 const subHeader = (text) => new Paragraph({
     spacing: { before: 70, after: 25 },
-    children: [new TextRun({ text, bold: true, size: 19, font: FONT, color: DARK })]
+    children: [new TextRun({
+        text,
+        bold: true,
+        size: 19,
+        font: FONT,
+        color: DARK
+    })]
 });
 
+// Skill row — bold category, normal items, same size as before
 const skillRow = (category, items) => new Paragraph({
     spacing: { before: 30, after: 30 },
     children: [
-        new TextRun({ text: category + ":  ", bold: true, size: 18, font: FONT, color: DARK }),
-        new TextRun({ text: items, size: 18, font: FONT, color: MED }),
+        new TextRun({
+            text: category + ": ",
+            bold: true,
+            size: 18,
+            font: FONT,
+            color: DARK
+        }),
+        new TextRun({
+            text: items,
+            bold: false,
+            size: 18,
+            font: FONT,
+            color: MED
+        }),
     ]
 });
 
@@ -148,20 +175,29 @@ function parseResume(text) {
 function buildDocument(parsed) {
     const children = [];
 
+    // NAME — same size as before
     children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
-        spacing: { before: 0, after: 25 },
-        children: [new TextRun({ text: parsed.name, bold: true, size: 34, font: FONT, color: BLUE })]
+        spacing: { before: 0, after: 20 },
+        children: [new TextRun({
+            text: parsed.name,
+            bold: true,
+            size: 34,
+            font: FONT,
+            color: BLUE
+        })]
     }));
 
+    // TITLE
     if (parsed.title) {
         children.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 0, after: 25 },
+            spacing: { before: 0, after: 20 },
             children: [new TextRun({ text: parsed.title, size: 19, font: FONT, color: GRAY })]
         }));
     }
 
+    // CONTACT
     if (parsed.contact) {
         const parts = parsed.contact.split('|').map(p => p.trim());
         const runs = [];
@@ -169,7 +205,13 @@ function buildDocument(parsed) {
             if (part.includes('linkedin.com')) {
                 runs.push(new ExternalHyperlink({
                     link: 'https://' + part.trim(),
-                    children: [new TextRun({ text: part.trim(), size: 17, font: FONT, color: BLUE, underline: {} })]
+                    children: [new TextRun({
+                        text: part.trim(),
+                        size: 17,
+                        font: FONT,
+                        color: BLUE,
+                        underline: {}
+                    })]
                 }));
             } else {
                 runs.push(new TextRun({ text: part, size: 17, font: FONT, color: GRAY }));
@@ -180,31 +222,41 @@ function buildDocument(parsed) {
         });
         children.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 0, after: 25 },
+            spacing: { before: 0, after: 20 },
             children: runs
         }));
     }
 
+    // SUMMARY
     if (parsed.summary) {
         children.push(divider());
         children.push(sectionHeader("Professional Summary"));
         children.push(new Paragraph({
-            spacing: { before: 35, after: 35 },
-            children: [new TextRun({ text: parsed.summary, size: 18, font: FONT, color: MED })]
+            spacing: { before: 25, after: 25 },
+            children: [new TextRun({
+                text: parsed.summary,
+                size: 18,
+                font: FONT,
+                color: MED
+            })]
         }));
     }
 
+    // SKILLS
     if (parsed.skills.length > 0) {
         children.push(divider());
         children.push(sectionHeader("Technical Skills"));
         parsed.skills.forEach(s => children.push(skillRow(s.category, s.items)));
     }
 
+    // EXPERIENCE
     if (parsed.experience.length > 0) {
         children.push(divider());
         children.push(sectionHeader("Work Experience"));
         parsed.experience.forEach(job => {
-            children.push(jobHeader(job.role, job.company, job.locationDate, job.dates));
+            children.push(jobHeader(
+                job.role, job.company, job.locationDate, job.dates
+            ));
             if (job.sections && job.sections.length > 0) {
                 job.sections.forEach(sub => {
                     children.push(subHeader(sub.title));
@@ -217,6 +269,7 @@ function buildDocument(parsed) {
         });
     }
 
+    // PROJECTS
     if (parsed.projects.length > 0) {
         children.push(divider());
         children.push(sectionHeader("Portfolio Projects"));
@@ -226,6 +279,7 @@ function buildDocument(parsed) {
         });
     }
 
+    // EDUCATION
     if (parsed.education.length > 0) {
         children.push(divider());
         children.push(sectionHeader("Education"));
@@ -233,16 +287,28 @@ function buildDocument(parsed) {
             const parts = line.split('|').map(p => p.trim());
             if (parts.length >= 2) {
                 children.push(new Paragraph({
-                    spacing: { before: 50, after: 25 },
+                    spacing: { before: 40, after: 20 },
                     tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
                     children: [
-                        new TextRun({ text: parts[0], bold: true, size: 18, font: FONT, color: DARK }),
-                        new TextRun({ text: "  |  " + parts.slice(1).join('  |  '), size: 17, font: FONT, color: GRAY, italics: true }),
+                        new TextRun({
+                            text: parts[0],
+                            bold: true,
+                            size: 18,
+                            font: FONT,
+                            color: DARK
+                        }),
+                        new TextRun({
+                            text: "  |  " + parts.slice(1).join('  |  '),
+                            size: 17,
+                            font: FONT,
+                            color: GRAY,
+                            italics: true
+                        }),
                     ]
                 }));
             } else {
                 children.push(new Paragraph({
-                    spacing: { before: 30, after: 25 },
+                    spacing: { before: 25, after: 20 },
                     children: [new TextRun({ text: line, size: 18, font: FONT, color: MED })]
                 }));
             }

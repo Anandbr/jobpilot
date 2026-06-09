@@ -176,3 +176,41 @@ def _convert_to_pdf(docx_path: Path, output_dir: Path) -> Path:
         raise Exception("PDF not created")
 
     return pdf_path
+
+def get_readable_resume_path(job_id: str, job_title: str, 
+                             company: str) -> str:
+    """
+    Returns a readable PDF path for uploading to job portals.
+    Creates a copy with readable filename id needed.
+    """
+    from pathlib import Path
+    from config.loader import get_candidate
+    import shutil
+
+    candidate = get_candidate()
+    name = candidate["name"].replace(" ", "_")
+
+    #Clean job titel and company for filename
+    title_clean = job_title.replace(" ", "_")
+    title_clean = ''.join(c for c in title_clean
+                        if c.isalnum() or c == '_')[:25]
+    company_clean = company.replace(" ", "_")
+    company_clean = ''.join(c for c in company_clean 
+                            if c.isalnum() or c == '_')[:20]
+
+    # Source file — stored by job_id
+    source = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
+
+    if not source.exists():
+        return None
+
+    # Readable name for upload
+    readable_name = f"{name}_{title_clean}_{company_clean}.pdf"
+    readable_path = Path(f"data/tailored_resumes/{readable_name}")
+
+    # Copy with readable name
+    shutil.copy2(source, readable_path)
+
+    return str(readable_path)
+
+
