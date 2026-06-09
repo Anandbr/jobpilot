@@ -184,12 +184,15 @@ def scan_for_new_jobs() -> List[Dict]:
     returns only new relevant jobs.
     """
     from tools.scorer import quick_keyword_filter
+    from tools.ollama_client import quick_relevance_check
 
     print("\n[SCAN] Checking for new jobs...")
 
     all_jobs = fetch_linkedin_jobs()
     new_jobs = []
     skipped = 0
+    prefs = get_job_search()
+    preferred_locations = [l.lower() for l in prefs.get("locations", [])]
 
     for job in all_jobs:
         # Skip if we already have this job
@@ -199,14 +202,30 @@ def scan_for_new_jobs() -> List[Dict]:
 
         # Skip obviously non-US locations
         job_location = job.get("location", "").lower()
-        non_us_signals = [
-            "australia", "uk", "united kingdom", "scotland",
-            "london", "germany", "france", "india", "brazil",
-            "canada", "mexico", "spain", "italy", "netherlands"
-        ]
-        if any(signal in job_location for signal in non_us_signals):
+        
+        #Check if job location matches any preferred location
+        location_match = any(
+            preferred in job_location
+            for preferred in preferred_locations
+        )
+
+        if not location_match:
             skipped += 1
             continue
+
+        #Ollama pre-filter - free and fast
+        #Catches obvious non-matches before fetching full JD
+        title = job.get("title", "")
+        company = job.get("company", "")
+
+        try:
+            if not quick_relevance_check(title, company):
+                print(f" [OLLAMA FILTER] Skipping: {title} at {company}")
+                skipped += 1
+                continue
+        except Exception as e:
+            #If Ollama is down - skip filter, continue normally
+            print(f" [OLLAMA WARNING] {e} - skipping pre-filter")
 
         # Fetch full JD first
         if job["url"]:

@@ -44,6 +44,7 @@ Create `.env` file —
 ANTHROPIC_API_KEY=your_key
 TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_CHAT_ID=your_chat_id
+OLLAMA_BASE_URL=http://your-ollama-server-ip:11434
 
 Add your resume to `data/base_resume.pdf`
 
