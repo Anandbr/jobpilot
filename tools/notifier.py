@@ -115,6 +115,58 @@ def send_daily_summary(stats: dict) -> bool:
     )
     return send_message(message)
 
+def send_apply_confirmation(job: dict) -> bool:
+    """Send final confirmation buttons after screenshot is sent."""
+    message = (
+        f"👆 Review the screenshot above carefully.\n\n"
+        f"Tap <b>SUBMIT NOW</b> to submit the application\n"
+        f"or <b>CANCEL</b> to abort."
+    )
+
+    keyboard = {
+        "inline_keyboard": [[
+            {
+                "text": "🚀 SUBMIT NOW",
+                "callback_data": f"submit_{job['id']}"
+            },
+            {
+                "text": "❌ CANCEL",
+                "callback_data": f"cancel_{job['id']}"
+            }
+        ]]
+    }
+
+    try:
+        requests.post(
+            f"{BASE_URL}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard
+            },
+            timeout=10
+        )
+        return True
+    except Exception as e:
+        print(f"  [TELEGRAM ERROR] {e}")
+        return False
+    
+def send_photo(photo_path: str, caption: str = "") -> bool:
+    """Send a photo to Telegram."""
+    try:
+        with open(photo_path, "rb") as f:
+            response = requests.post(
+                f"{BASE_URL}/sendPhoto",
+                data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+                files={"photo": f},
+                timeout=30
+            )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"  [TELEGRAM PHOTO ERROR] {e}")
+        return False
+    
 def handle_callback(callback_query: dict) -> None:
     """
     Handle button taps from Telegram.
@@ -142,14 +194,22 @@ def handle_callback(callback_query: dict) -> None:
 
     elif data.startswith("confirm_"):
         job_id = data.replace("confirm_", "")
-        send_message(
-            f"🚀 Submitting application...\n"
-            f"OpenClaw integration coming soon!\n\n"
-            f"For now — open the job link and apply manually.\n"
-            f"Job ID: {job_id[:8]}"
-        )
-        from tools.database import update_job_status
-        update_job_status(job_id, "applied") #todo: maybe change this status from openclaw once it is actually applied
+        send_message("🚀 Submitting application...")
+        _handle_confirm_submit(job_id)
+
+    elif data.startswith("continue_"):
+        job_id = data.replace("continue_", "")
+        send_message("✅ Continuing application...")
+        from tools.database import get_job
+        from pathlib import Path
+        from tools.apply import apply_to_job
+        job = get_job(job_id)
+        pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
+        if job and pdf_path.exists():
+            apply_to_job(job=job, pdf_path=str(pdf_path))
+        else:
+            send_message("❌ Job or resume not found")
+    
     
     elif data.startswith("modify_"):
         job_id = data.replace("modify", "")
@@ -165,11 +225,71 @@ def handle_callback(callback_query: dict) -> None:
         update_job_status(job_id, "skipped")
         send_message(f"❌ Application cancelled.")
 
+    elif data.startswith("applied_"):
+        job_id = data.replace("applied_", "")
+        from tools.database import update_job_status, get_job
+        job = get_job(job_id)
+        update_job_status(job_id, "applied")
+        if job:
+            send_message(
+                f"✅ <b>Logged as applied!</b>\n\n"
+                f"<b>{job['title']}</b> at <b>{job['company']}</b>\n\n"
+                f"Good luck! 🤞"
+            )
+    
+    elif data.startswith("submit_"):
+        job_id = data.replace("submit_", "")
+        send_message("🚀 Submitting now...")
+        from tools.apply import submit_application
+        from tools.database import update_job_status, get_job
+        job = get_job(job_id)
+        if job:
+            result = submit_application(job_id)
+            if result:
+                update_job_status(job_id, "applied")
+                send_message(
+                    f"✅ Application submitted!\n"
+                    f"<b>{job['title']}</b> at <b>{job['company']}</b>\n"
+                    f"Good luck! 🤞"
+                )
+            else:
+                send_message(f"❌ Submit failed — apply manually\n{job.get('url', '')}")
+
+def _handle_confirm_submit(job_id: str):
+    """
+    User tapped CONFIRM — start filling the form.
+    Does NOT submit yet — waits for second confirmation.
+    """
+    from tools.database import get_job
+    from tools.apply import apply_to_job
+    from pathlib import Path
+
+    job = get_job(job_id)
+    if not job:
+        send_message("❌ Job not found in database")
+        return
+
+    pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
+    if not pdf_path.exists():
+        send_message(f"❌ Resume PDF not found")
+        return
+
+    send_message(
+        f"🤖 Filling application form for\n"
+        f"<b>{job['title']}</b> at <b>{job['company']}</b>\n\n"
+        f"Will send screenshot when ready..."
+    )
+
+    # Fill the form — does NOT submit
+    apply_to_job(job=job, pdf_path=str(pdf_path))
 
 def _handle_apply(job_id: str) -> None:
     """Tailor resume and prepare application when user taps APPLY."""
     from tools.database import get_job
     from tools.tailor_resume import tailor_resume
+    from tools.apply import apply_to_job
+    from pathlib import Path
+    import json
 
     job = get_job(job_id)
     if not job:
@@ -200,15 +320,18 @@ def _handle_apply(job_id: str) -> None:
         return
     
     # Send PDF
-    from pathlib import Path
     pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
+    print(f"  [PDF] Looking for: {pdf_path}")
+    print(f"  [PDF] Exists: {pdf_path.exists()}")
 
     if pdf_path.exists():
-        send_pdf(
+        result = send_pdf(
             str(pdf_path),
             caption=f"📄 Tailored for {job['title']} at {job['company']}"
         )
-
+        print(f"  [PDF] Send result: {result}")
+    else:
+        send_message("⚠️ PDF not found — resume text was generated but PDF conversion may have failed") 
     from tools.database import update_job_status
     update_job_status(job_id, "ready_to_apply")
 
