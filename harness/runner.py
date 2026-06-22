@@ -220,7 +220,7 @@ def start_callback_listener():
                 f"{base_url}/getUpdates",
                 params={
                     "offset": last_update_id + 1,
-                    "timeout": 30,
+                    "timeout": 5,
                     "allowed_updates": ["callback_query", "message"]
                 },
                 timeout=35

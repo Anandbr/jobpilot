@@ -237,10 +237,20 @@ def handle_message(message: dict) -> None:
         return
     
     #Check for pending confirmations first
-    pending = user.get("pending_confirmation")
+    pending = user.get("pending_confirmation", "") or ""
     if pending == "awaiting_api_key" and text and not text.startswith("/"):
         #This message is the API key - encrypt and store it
         _handle_api_key_submission(chat_id, text)
+        return
+    
+    elif pending.startswith("awaiting_update_") and not text.startswith("/"):
+        field = pending.replace("awaiting_update_", "")
+        _handle_update_value_received(
+            chat_id=chat_id,
+            field=field,
+            text=text,
+            document=document
+        )
         return
 
     # REGISTERED -> handle commands
@@ -255,6 +265,9 @@ def handle_message(message: dict) -> None:
     
     elif text.startswith("/delete-api-key"):
         _handle_delete_api_key(chat_id)
+
+    elif text.startswith("/profile-update"):
+        _handle_profile_update(chat_id)
     
     elif text.startswith("/profile"):
         _handle_profile(chat_id)
@@ -470,6 +483,183 @@ def _handle_profile(chat_id: str) -> None:
         f"<b>Experience preview:</b>\n{exp_preview}"
     )
 
+def _handle_profile_update(chat_id: str) -> None:
+    """
+    Show profile field selection button.
+    Called on /profile-update command or "Yes, update more" tap.
+    """
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "👤 Name",
+                 "callback_data": f"update_field_name|{chat_id}"},
+                {"text": "📧 Email",
+                 "callback_data": f"update_field_email|{chat_id}"},
+                {"text": "📱 Phone",
+                 "callback_data": f"update_field_phone|{chat_id}"},
+            ],
+            [
+                {"text": "📍 Location",
+                 "callback_data": f"update_field_location|{chat_id}"},
+                {"text": "💼 LinkedIn",
+                 "callback_data": f"update_field_linkedin_url|{chat_id}"},
+                {"text": "💻 GitHub",
+                 "callback_data": f"update_field_github_url|{chat_id}"},
+            ],
+            [
+                {"text": "🛂 Visa Status",
+                 "callback_data": f"update_field_visa_status|{chat_id}"},
+                {"text": "💰 Salary",
+                 "callback_data": f"update_field_salary_expectation|{chat_id}"},
+                {"text": "📄 Resume",
+                 "callback_data": f"update_field_base_resume|{chat_id}"},
+            ]
+        ]
+    }
+    send_message_to(
+        chat_id,
+        "✏️ <b>Update your profile</b>\n\n"
+        "Which field would you like to update?",
+        keyboard=keyboard
+    )
+
+def _handle_update_field_selected(chat_id: str, field: str) -> None:
+    """
+    User tapped a field button.
+    Set pending state and ask for the new value.
+    """ 
+    from tools.database import get_connection
+
+    field_prompts = {
+        "name": "What's your new full legal name?",
+        "email": "What's your new email address?",
+        "phone": "What's your new phone number? (include country code)",
+        "location": "What city and country are you based in now?",
+        "linkedin_url": "What's your new LinkedIn profile URL?",
+        "github_url": "What's your new GitHub URL? (or /skip)",
+        "visa_status": "What's your current work authorization status?",
+        "salary_expectation": "What's your salary expectation? (include currency)",
+        "base_resume": "Please send your new resume as a PDF file."
+    }
+
+    prompt = field_prompts.get(field, f"What's your new {field}?")
+
+    #Set pending state - next non-command message = new value
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+            UPDATE users SET pending_confirmation = ?,
+            updated_at = CURRENT_TIMESTAMP WHERE
+            telegram_chat_id = ?
+            """, (f"awaiting_update_{field}", chat_id))
+    conn.commit()
+    conn.close()
+
+    logger.info(f"[PROFILE UPDATE] Awaiting input | "
+                f"chat_id={chat_id} | field={field}"
+                )
+    send_message_to(chat_id, prompt)
+    
+def _handle_update_value_received(chat_id: str, field: str,
+                                  text: str = None, document = None) -> None:
+    """
+    User sent new value - Validate, save, confirm, 
+    then ask if they want to update anything else.
+    """
+    from tools.database import get_connection
+    from tools.registration import _validate_step
+
+    #Resume is a document upload
+    if field == "base_resume":
+        if not document:
+            send_message_to(
+                chat_id,
+                "Please send your resume as a PDF file - "
+                "tap the 📎 attachment button."
+            )
+            return
+        value = document.get("file_id", "")
+    else:
+        if not text or not text.strip():
+            send_message_to(chat_id, "I didn't get that - please try again.")
+            return
+        
+        #Handle /skip for optional fields
+        if text.strip().lower() == "/skip" and field in ["github_url"]:
+            value = ""
+        else:
+            value = text.strip()
+            #Reuse registration validation
+            error = _validate_step(field, value)
+            if error:
+                send_message_to(chat_id, error)
+                return
+    
+    #Map step key to DB column name
+    FIELD_TO_COLUMN = {
+        "base_resume": "base_resume",
+        "linkedin_url": "linkedin_url",
+        "github_url": "github_url",
+        "visa_status": "visa_status",
+        "salary_expectation": "salary_expectation",
+    }
+    db_column = FIELD_TO_COLUMN.get(field, field)
+
+    #Save to DB and clear pending state
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+            UPDATE users SET {db_column} = ?,
+            pending_confirmation = NULL,
+            updated_at = CURRENT_TIMESTAMP WHERE
+            telegram_chat_id = ?
+            """, (value, chat_id))
+    conn.commit()
+    conn.close()
+
+    logger.info(f"[PROFILE UPDATE] Saved |"
+                f"chat_id={chat_id} | field = {field}"
+                )
+    
+    # Human-readable field label for confirmation
+    field_labels = {
+        "name": "Name",
+        "email": "Email",
+        "phone": "Phone",
+        "location": "Location",
+        "linkedin_url": "LinkedIn",
+        "github_url": "GitHub",
+        "visa_status": "Visa status",
+        "salary_expectation": "Salary expectation",
+        "base_resume": "Resume"
+    }
+    label = field_labels.get(field, field)
+
+    if field == "base_resume":
+        confirm_text = f"✅ {label} updated."
+    else:
+        confirm_text = f"✅ {label} updated to <b>{value}</b>"
+
+    # Ask if they want to update anything else
+    keyboard = {
+        "inline_keyboard": [[
+            {
+                "text": "✏️ Yes, update more",
+                "callback_data": f"update_more_|{chat_id}"
+            },
+            {
+                "text": "✅ Done",
+                "callback_data": f"update_done_|{chat_id}"
+            }
+        ]]
+    }
+
+    send_message_to(
+        chat_id,
+        f"{confirm_text}\n\nWould you like to update anything else?",
+        keyboard=keyboard
+    )    
+
 def handle_callback(callback_query: dict) -> None:
     """
     Handle button taps from Telegram.
@@ -507,6 +697,23 @@ def handle_callback(callback_query: dict) -> None:
     elif data.startswith("cancel_experience_reset_"):
         chat_id = data.replace("cancel_experience_reset_", "")
         send_message_to(chat_id, "Cancelled — your experience is unchanged.")
+    
+    elif data.startswith("update_field_"):
+        # format: "update_field_{field}|{chat_id}"
+        without_prefix = data.replace("update_field_", "")
+        field, chat_id = without_prefix.split("|", 1)
+        _handle_update_field_selected(chat_id, field)
+
+    elif data.startswith("update_more_|"):
+        chat_id = data.replace("update_more_|", "")
+        _handle_profile_update(chat_id)
+
+    elif data.startswith("update_done_|"):
+        chat_id = data.replace("update_done_|", "")
+        send_message_to(
+            chat_id,
+            "✅ Profile saved.\n\nUse /profile to review your details."
+        )
     
     elif data.startswith("apply_"):
         job_id = data.replace("apply_", "")
