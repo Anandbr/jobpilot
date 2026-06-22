@@ -57,7 +57,7 @@ def call_ollama(prompt: str, expect_json: bool = False) -> str:
             f"Is your Debian server running?"
         )
     except Exception as e:
-        raise Exceptio(f"Ollama error: {e}")
+        raise Exception(f"Ollama error: {e}")
 
 
 def classify_email(subject: str, sender: str, preview: str) -> dict:

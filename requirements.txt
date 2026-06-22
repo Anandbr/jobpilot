@@ -8,3 +8,10 @@ python-dotenv==1.0.0
 PyPDF2==3.0.1
 feedparser==6.0.11
 schedule==1.2.1
+# Gmail API
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.127.0
+cryptography==48.0.1
+prometheus-client==0.25.0

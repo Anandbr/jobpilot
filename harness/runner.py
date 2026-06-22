@@ -8,6 +8,9 @@ from tools.notifier import send_job_notification, send_pdf, send_daily_summary, 
 from tools.database import update_job_status, get_api_spend_today
 from config.loader import get_job_search
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 def process_job(job: dict) -> bool:
     """
@@ -18,11 +21,11 @@ def process_job(job: dict) -> bool:
     jd_text = job.get("jd_text", "")
 
     if not jd_text:
-        print(f" [SKIP] No JD text for {job['title']}")
+        logger.info(f" [SKIP] No JD text for {job['title']}")
         return False
     
     # Score it
-    print(f"\n Processing: {job['title']} at {job['company']}")
+    logger.info(f"\n Processing: {job['title']} at {job['company']}")
     score_result = score_job(job_id=job_id, jd_text=jd_text)
 
     if not score_result:
@@ -33,11 +36,11 @@ def process_job(job: dict) -> bool:
 
     #Below threshold - skip
     if score < min_score:
-        print(f" [LOW_SCORE] {score}/10 - below threshold {min_score}")
+        logger.info(f" [LOW_SCORE] {score}/10 - below threshold {min_score}")
         update_job_status(job_id, "low_score")
         return False
 
-    print(f" [HIGH_MATCH] {score}/10 - notifying user...")
+    logger.info(f" [HIGH_MATCH] {score}/10 - notifying user...")
 
     # Just notify — no tailoring yet
     sent = send_job_notification(
@@ -47,7 +50,7 @@ def process_job(job: dict) -> bool:
 
     if sent:
         update_job_status(job_id, "notified")
-        print(f"  ✅ Notified: {job['title']}")
+        logger.info(f"  ✅ Notified: {job['title']}")
         return True
 
     return False
@@ -87,9 +90,9 @@ def run_scan():
     One full scan cycle.
     Find jobs -> process each one -> notify on matches
     """
-    print(f"\n{'='*50}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scan...")
-    print(f"{'='*50}")
+    logger.info(f"\n{'='*50}")
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scan...")
+    logger.info(f"{'='*50}")
 
     try:
         #Find new jobs
@@ -107,18 +110,18 @@ def run_scan():
                     notified += 1
                     time.sleep(2) #Small delay between notifications
             except Exception as e:
-                print(f" [ERROR] Failed to process {job.get('title')}: {e}")
+                logger.error(f" [ERROR] Failed to process {job.get('title')}: {e}")
                 continue
         
-        print(f"\n[SCAN COMPLETE] {notified} notifications sent "
+        logger.info(f"\n[SCAN COMPLETE] {notified} notifications sent "
               f"out pf {len(new_jobs)} new jobs")
 
         #Check budget
         spend = get_api_spend_today()
-        print(f"[BUDGET] Total API spend today: ${spend:.4f}")
+        logger.info(f"[BUDGET] Total API spend today: ${spend:.4f}")
 
     except Exception as e:
-        print(f"[SCAN_ERROR] {e}")
+        logger.error(f"[SCAN_ERROR] {e}")
         send_message(f"⚠️ JobPilot scan error: {e}")
 
 def send_evening_summary():
@@ -167,7 +170,7 @@ def start(run_once: bool = False):
     load_dotenv()
 
     send_message("🚀 JobPilot agent started!")
-    print("\n[JOBPILOT] Starting agent...")
+    logger.info("\n[JOBPILOT] Starting agent...")
 
     #Start callback listener in background thread
     listener_thread = threading.Thread(
@@ -189,8 +192,8 @@ def start(run_once: bool = False):
     #Run immediately on start
     run_scan()
 
-    print("\n[JOBPILOT] Agent running. Scans every 30 minutes.")
-    print("Press Ctrl+C to stop.\n")
+    logger.info("\n[JOBPILOT] Agent running. Scans every 30 minutes.")
+    logger.info("Press Ctrl+C to stop.\n")
 
     while True:
         schedule.run_pending()
@@ -209,7 +212,7 @@ def start_callback_listener():
     base_url = f"https://api.telegram.org/bot{token}"
     last_update_id = 0
 
-    print("[TELEGRAM] Callback listener started")
+    logger.info("[TELEGRAM] Callback listener started")
 
     while True:
         try:
@@ -218,7 +221,7 @@ def start_callback_listener():
                 params={
                     "offset": last_update_id + 1,
                     "timeout": 30,
-                    "allowed_updates": ["callback_query"]
+                    "allowed_updates": ["callback_query", "message"]
                 },
                 timeout=35
             )
@@ -231,8 +234,12 @@ def start_callback_listener():
                     last_update_id = update["update_id"]
                     if "callback_query" in update:
                         handle_callback(update["callback_query"])
+                    
+                    elif "message" in update:
+                        from tools.notifier import handle_message
+                        handle_message(update["message"])
 
         except Exception as e:
-            print(f"[TELEGRAM LISTENER ERROR] {e}")
+            logger.error(f"[TELEGRAM LISTENER ERROR] {e}")
             time.sleep(5)
 

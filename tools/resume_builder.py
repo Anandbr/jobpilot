@@ -28,7 +28,7 @@ def read_base_resume() -> str:
     Supports PDF and DOCX.
     """
     config = get_resume_config()
-    file_path = Path(config["base_resume_path"])
+    file_path = Path(config["base_resume"])
 
     if not file_path.exists():
         raise FileNotFoundError(

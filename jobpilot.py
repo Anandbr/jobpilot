@@ -2,6 +2,24 @@ import sys
 import argparse
 from harness.runner import start, run_scan
 from tools.database import get_connection, get_api_spend_today
+from tools.metrics import start_metrics_server
+import logging
+import os
+
+def setup_logging():
+    """
+    Console-only logging for now.
+    File rotation added later.
+    """
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    logging.info("JobPilot Starting up...")
 
 def cmd_start():
     """Start the agent continuosly."""
@@ -10,6 +28,16 @@ def cmd_start():
 def cmd_scan():
     """Run one scan and exit."""
     start(run_once=True)
+
+def cmd_listen():
+    # Telegram listener only — no scanning
+        # Perfect for testing registration flow
+        from harness.runner import start_callback_listener
+        from tools.notifier import send_message
+        import threading
+        print("[JOBPILOT] Listen-only mode — no scanning")
+        send_message("👂 JobPilot listening (no scan)")
+        start_callback_listener()
 
 def cmd_status():
     """Show current pipeline status."""
@@ -78,11 +106,12 @@ def cmd_status():
     print("=" * 50)
 
 if __name__ == "__main__":
+    start_metrics_server()
     parser = argparse.ArgumentParser(description="JobPilot - AI Job Agent")
     parser.add_argument(
         "command",
-        choices=["start", "scan", "status"],
-        help="start=run continuosly | scan = one scan | status = check pipeline"
+        choices=["start", "scan", "status", "listen"],
+        help="start=run continuosly | scan = one scan | status = check pipeline | listen = listen for message from user"
     )
     args = parser.parse_args()
 
@@ -92,3 +121,5 @@ if __name__ == "__main__":
         cmd_scan()
     elif args.command == "status":
         cmd_status()
+    elif args.command == "listen":
+        cmd_listen()

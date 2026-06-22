@@ -78,6 +78,89 @@ def initialze_database():
     conn.close()
     print("Database initialized successfully")
 
+def init_users_table():
+    """
+    Creates multi-user tables if they don't exist.
+    Additive only — does not touch existing jobs table structure
+    except adding the user_id column.
+    Call this once at startup, same place init_db() / 
+    "Database initialized successfully" currently runs.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # -- USERS TABLE
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            telegram_chat_id TEXT UNIQUE NOT NULL,
+
+            name TEXT,
+            email TEXT,
+            phone TEXT,
+            location TEXT,
+            linkedin_url TEXT,
+            github_url TEXT,
+            visa_status TEXT,
+            salary_expectation TEXT,
+            base_resume TEXT,
+
+            extended_experience TEXT DEFAULT '',
+
+            registration_status TEXT DEFAULT 'in_progress',
+            registration_step TEXT DEFAULT 'name',
+
+            claude_api_key_encrypted TEXT,
+
+            free_scan_runs_used INTEGER DEFAULT 0,
+            free_scan_runs_cap INTEGER DEFAULT 3,
+
+            pending_confirmation TEXT,
+            pending_confirmation_set_at TIMESTAMP,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_users_telegram_chat_id
+        ON users(telegram_chat_id)
+    """)
+
+    # TEMPORARY MIGRATION — remove after all environments have been updated
+    # Added: June 2026. Safe to delete once Debian DB is confirmed migrated.
+    # -- USERS TABLE — rename legacy base_resume_path column if present
+    cursor.execute("PRAGMA table_info(users)")
+    existing_user_columns = [row[1] for row in cursor.fetchall()]
+    if "base_resume_path" in existing_user_columns and "base_resume" not in existing_user_columns:
+        cursor.execute("ALTER TABLE users RENAME COLUMN base_resume_path TO base_resume")
+
+    # -- GLOBAL FREE-TIER USAGE CAP
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS global_usage (
+            date TEXT PRIMARY KEY,
+            free_tier_scan_runs_used INTEGER DEFAULT 0,
+            free_tier_scan_runs_cap INTEGER DEFAULT 50
+        )
+    """)
+
+    # -- JOBS TABLE — add user_id column if it doesn't already exist
+    # SQLite has no "ADD COLUMN IF NOT EXISTS", so we check manually
+    cursor.execute("PRAGMA table_info(jobs)")
+    existing_columns = [row[1] for row in cursor.fetchall()]
+    if "user_id" not in existing_columns:
+        cursor.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id)
+    """)
+
+    conn.commit()
+    conn.close()
+    print("  [DB] Multi-user tables ready")
+    
+
 
 # --------------------JOB FUNCTIONS---------------------------
 
@@ -216,3 +299,4 @@ def get_resume_for_job(job_id: str) -> dict | None:
 
 # --------------------INITIALIZE ON IMPORT---------------------------
 initialze_database()
+init_users_table()

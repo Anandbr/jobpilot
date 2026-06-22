@@ -92,11 +92,11 @@ def take_screenshot_and_send(job_id: str, caption: str) -> bool:
 
     return send_photo(local_path, caption)
 
-def get_real_apply_url(linkedin_url: str) -> str:
+def get_real_apply_url(linkedin_url: str) -> tuple:
     """
     Navigate to LinkedIn job page.
     Handles both Easy Apply and external Apply buttons.
-    Returns tuple: (url, is_easy_apply)
+    Returns tuple: (url, is_easy_apply, easy_apply_ref)
     """
     print(f"  [APPLY] Navigating to LinkedIn job...")
 
@@ -109,61 +109,78 @@ def get_real_apply_url(linkedin_url: str) -> str:
 
     snapshot = browser("snapshot")
 
-    # DEBUG — print all buttons found
-    print("  [DEBUG] Links and buttons found:")
+    bad_domains = [
+        "li.protechts.net", "linkedin.com", "doubleclick.net",
+        "google.com", "recaptcha.net", "accounts.google.com",
+        "lnkd.demdex.net", "blob:"
+    ]
+    good_domains = [
+        "greenhouse", "lever", "ashby", "workday",
+        "jobvite", "icims", "myworkday", "smartrecruiters",
+        "rippling", "bamboohr"
+    ]
+
+    # DEBUG
+    print("  [DEBUG] Apply-related links and buttons:")
     for line in snapshot.split("\n"):
         line_lower = line.lower()
         if ("button" in line_lower or "link" in line_lower) and "apply" in line_lower:
             print(f"    {line.strip()[:100]}")
-    # Check for Easy Apply link OR button
-    # Check both links and buttons
+
+    # Priority 1 — "Apply on company website" — external ATS
     for line in snapshot.split("\n"):
         line_lower = line.lower()
-
-        # Easy Apply link (LinkedIn logged in)
-        if 'link' in line_lower and 'easy apply' in line_lower:
-            print(f"  [APPLY] Found Easy Apply link: {line.strip()[:80]}")
-            # Try direct URL first
-            url_match = re.search(r'/url:\s*(https?://[^\s]+)', line)
-            if url_match:
-                easy_url = url_match.group(1)
-                return easy_url, True, None
-            # Fallback to ref click
-            ref_match = re.search(r'\[ref=(e\d+)\]', line)
-            if ref_match:
-                return linkedin_url, True, ref_match.group(1)
-
-        # Apply button
-        if 'button' in line_lower and any(x in line_lower for x in [
-            '"apply"', '"easy apply"', '"apply now"', '"apply for this job"'
-        ]):
-            ref_match = re.search(r'\[ref=(e\d+)\]', line)
-            if ref_match:
-                print(f"  [APPLY] Found Apply button: {line.strip()[:80]}")
-                return linkedin_url, True, ref_match.group(1)
-
-    # Look for external Apply button
-    for line in snapshot.split("\n"):
-        line_lower = line.lower()
-        if 'button' in line_lower and line_lower.strip().startswith('- button "apply"'):
+        if 'link' in line_lower and 'apply on company website' in line_lower:
             ref_match = re.search(r'\[ref=(e\d+)\]', line)
             if ref_match:
                 ref = ref_match.group(1)
-                print(f"  [APPLY] External Apply at {ref} — clicking...")
+                print(f"  [APPLY] External apply on company website: {ref} — clicking...")
                 browser(f"click {ref}")
                 human_delay(4, 6)
 
-                # Find real ATS URL in new tabs
-                bad_domains = [
-                    "li.protechts.net", "linkedin.com", "doubleclick.net",
-                    "google.com", "recaptcha.net", "accounts.google.com",
-                    "lnkd.demdex.net", "blob:"
-                ]
-                good_domains = [
-                    "greenhouse", "lever", "ashby", "workday",
-                    "jobvite", "icims", "myworkday", "smartrecruiters",
-                    "rippling", "bamboohr"
-                ]
+                tabs = browser("tabs")
+                for tab_line in tabs.split("\n"):
+                    tab_lower = tab_line.lower()
+                    if any(bad in tab_lower for bad in bad_domains):
+                        continue
+                    if any(good in tab_lower for good in good_domains):
+                        url_match = re.search(r'https?://[^\s\]]+', tab_line)
+                        if url_match:
+                            real_url = url_match.group(0)
+                            print(f"  [APPLY] Real ATS URL: {real_url}")
+                            return real_url, False, None
+
+                # If no known ATS found in tabs — check all non-LinkedIn tabs
+                for tab_line in tabs.split("\n"):
+                    tab_lower = tab_line.lower()
+                    if any(bad in tab_lower for bad in bad_domains):
+                        continue
+                    url_match = re.search(r'https?://[^\s\]]+', tab_line)
+                    if url_match:
+                        real_url = url_match.group(0)
+                        print(f"  [APPLY] Unknown ATS URL: {real_url}")
+                        return real_url, False, None
+
+    # Priority 2 — "Easy Apply to this job" — must be exact match
+    for line in snapshot.split("\n"):
+        line_lower = line.lower()
+        if 'link' in line_lower and 'easy apply to this job' in line_lower:
+            print(f"  [APPLY] Found Easy Apply link: {line.strip()[:80]}")
+            ref_match = re.search(r'\[ref=(e\d+)\]', line)
+            if ref_match:
+                return linkedin_url, True, ref_match.group(1)
+
+    # Priority 3 — Apply button (exact match only)
+    for line in snapshot.split("\n"):
+        line_lower = line.lower()
+        stripped = line_lower.strip()
+        if stripped.startswith('- button "apply"') or stripped.startswith('- button "apply now"'):
+            ref_match = re.search(r'\[ref=(e\d+)\]', line)
+            if ref_match:
+                ref = ref_match.group(1)
+                print(f"  [APPLY] Apply button: {ref} — clicking...")
+                browser(f"click {ref}")
+                human_delay(4, 6)
 
                 tabs = browser("tabs")
                 for tab_line in tabs.split("\n"):
@@ -181,23 +198,45 @@ def get_real_apply_url(linkedin_url: str) -> str:
 def detect_stuck(snapshot: str) -> dict:
     """
     Detect if browser is stuck and needs human help.
-    Returns stuck type and suggested action.
     """
     snapshot_lower = snapshot.lower()
 
-    if any(x in snapshot_lower for x in ["captcha", "verify you are human", "robot"]):
+    # Captcha — must be very specific signals
+    if any(x in snapshot_lower for x in [
+        "verify you are human",
+        "i'm not a robot",
+        "prove you're human",
+        "complete the captcha"
+    ]):
         return {"stuck": True, "type": "captcha",
                 "message": "CAPTCHA detected — need you to solve it"}
 
-    if any(x in snapshot_lower for x in ["create account", "sign up", "register", "create your account"]):
+    # Account creation
+    if any(x in snapshot_lower for x in [
+        "create your account",
+        "create an account",
+        "sign up for free",
+        "register for free"
+    ]):
         return {"stuck": True, "type": "account_creation",
                 "message": "Account creation required"}
 
-    if any(x in snapshot_lower for x in ["verify your email", "check your inbox", "confirmation code", "verification code"]):
+    # Email verification
+    if any(x in snapshot_lower for x in [
+        "verify your email",
+        "check your inbox",
+        "we sent a code",
+        "enter the code we sent"
+    ]):
         return {"stuck": True, "type": "email_verification",
                 "message": "Email verification required"}
 
-    if any(x in snapshot_lower for x in ["sign in", "log in", "login"]):
+    # Login wall
+    if any(x in snapshot_lower for x in [
+        "sign in to continue",
+        "log in to continue",
+        "please sign in"
+    ]):
         return {"stuck": True, "type": "login",
                 "message": "Login required"}
 
@@ -207,6 +246,17 @@ def send_stuck_notification(job: dict, stuck_info: dict):
     """Send Telegram notification when agent is stuck."""
     import requests
     from tools.notifier import BASE_URL, TELEGRAM_CHAT_ID
+
+    # Take screenshot first so user can see what's happening
+    take_screenshot_and_send(
+        job_id=job["id"],
+        caption=f"🚧 Agent stuck — {stuck_info['message']}"
+    )
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    base_url = f"https://api.telegram.org/bot{token}"
+    novnc_url = os.getenv("NOVNC_URL")
 
     message = (
         f"🚧 <b>Agent needs your help!</b>\n\n"

@@ -54,7 +54,7 @@
         "h1b_sponsorship_required": true
     },
     "resume": {
-        "base_resume_path": "data/base_resume.pdf",
+        "base_resume": "data/base_resume.pdf",
         "max_pages": 1,
         "prefer_one_page": true
     },
