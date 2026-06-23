@@ -132,14 +132,14 @@ REGISTRATION_STEPS = [
         "required": True
     },
     {
-    "key": "job_titles",
-    "question": (
-        "Almost done! What job titles are you targeting?\n\n"
-        "Send them separated by commas:\n"
-        "e.g. AI Engineer, ML Engineer, Software Engineer\n\n"
-        "I'll search LinkedIn for these roles daily."
-    ),
-    "required": True
+        "key": "job_titles",
+        "question": (
+            "Almost done! What job titles are you targeting?\n\n"
+            "Send them separated by commas:\n"
+            "e.g. AI Engineer, ML Engineer, Software Engineer\n\n"
+            "I'll search LinkedIn for these roles daily."
+        ),
+        "required": True
     },
     {
         "key": "job_locations",
