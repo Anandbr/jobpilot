@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http:localhost:11434")
 
 def process_job_for_user(job: dict, user:dict,
-                     user_candidate: dict, min_score: float) -> dict | None:
+                     user_candidate: dict, min_score: float,
+                     api_key: str = None) -> dict | None:
     """
     Score a job against a specific user's profile.
     Returns score_result dict if above threshold, None if below.
@@ -25,14 +26,7 @@ def process_job_for_user(job: dict, user:dict,
     Why separate from process_job? — the old function used
     hardcoded global preferences. This one takes per-user
     candidate and preferences explicitly.
-    """
-    job_id = job["id"]
-    jd_text = job.get("jd_text", "")
-
-    if not jd_text:
-        logger.info(f" [SKIP] No JD text for {job['title']}")
-        return None
-    
+    """    
     user_prefs = get_job_search_for_user(user["id"])
     exclude_keywords = [
         k.lower() for k in user_prefs.get("exclude_keywords", [])
@@ -59,13 +53,26 @@ def process_job_for_user(job: dict, user:dict,
         )
         return None
     
+    job_id = job["id"]
+    jd_text = job.get("jd_text", "")
+
+    if not jd_text:
+        logger.info(f" [SKIP] No JD text for {job['title']}")
+        return None
+    
     # Score it
     logger.info(
-        f"[SCORE] Scoring | "
-        f"job={job['title']} at {job['company']} | "
-        f"user={user.get('name', 'unknown')}"
+        f"[SCORE] Scoring | job={job['title']} | "
+        f"user={user.get('name', 'unknown')} | "
+        f"key={'user' if api_key else 'owner'}"
     )
-    score_result = score_job(job_id=job_id, jd_text=jd_text)
+
+    # Pass api_key through to scorer
+    score_result = score_job(
+        job_id=job_id,
+        jd_text=jd_text,
+        api_key=api_key
+    )
 
     if not score_result:
         return None
@@ -74,10 +81,6 @@ def process_job_for_user(job: dict, user:dict,
 
     #Below threshold - skip
     if score < min_score:
-        logger.info(
-            f"[SCORE] Below threshold | "
-            f"score={score}/{min_score} | job={job['title']}"
-        )
         update_job_status(job_id, "low_score")
         return None
 
@@ -205,11 +208,14 @@ def run_scan():
             user_locations = [
                 l.lower() for l in user_prefs.get("locations", [])
             ]    
+            # Get user's Claude API key (decrypted, in memory only)
+            from tools.claude_client import get_user_claude_key
+            api_key = get_user_claude_key(chat_id)
 
             #Check for free tier
             free_used = user.get("free_scan_runs_used", 0)
             free_cap = user.get("free_scan_runs_cap", 3)
-            has_api_key = bool(user.get("calude-api_key_encrypted"))
+            has_api_key = bool(api_key)
 
             if not has_api_key and free_used >= free_cap:
                 logger.info(
@@ -240,7 +246,8 @@ def run_scan():
                         job=job,
                         user=user,
                         user_candidate=user_candidate,
-                        min_score=min_score
+                        min_score=min_score,
+                        api_key=api_key
                     )
 
                     if score_result:

@@ -1,48 +1,69 @@
 import json
-import hashlib
+import logging
 from tools.database import job_already_scored, save_score, save_job
 from tools.claude_client import call_claude, BudgetExceededException
 from tools.resume_builder import read_base_resume
 from harness.skill_loader import render_skill, load_candidate_context, load_extended_expereince
 from config.loader import get_job_search
 
-def quick_keyword_filter(jd_text: str) -> bool:
+logger = logging.getLogger(__name__)
+
+def quick_keyword_filter(jd_text: str, prefs: dict = None) -> bool:
     """
     Level 1 filter - no api calls.
     Returns True if job passes basic keyword search.
+
+    Args:
+        jd_text: Job description text
+        prefs: Job search preferences dict. If None, uses owner
+               preferences from preferences.json (backwards compat).
+
+    Why accept prefs? — for multi-user, each user has different
+    role_keywords and exclude_keywords. Passing prefs here lets
+    the scan loop filter per-user without hardcoding.
     """
-    preferences = get_job_search()
+    if prefs is None:
+        prefs = get_job_search()
     jd_lower = jd_text.lower()
 
     #Must match atleast one role keyword
+    role_keywords = prefs.get("role_keywords", [])
     role_match = any(
         keyword in jd_lower
-        for keyword in preferences["role_keywords"]
+        for keyword in role_keywords
     )
     if not role_match:
         return False
     
     #Must not contain exclude keywords
+    exclude_keywords = prefs.get("exclude_keywords", [])
     excluded = any(
         keyword in jd_lower
-        for keyword in preferences["exclude_keywords"]
+        for keyword in exclude_keywords
     )
     if excluded:
         return False
     
     return True
 
-def score_job(job_id: str, jd_text: str) -> dict | None:
+def score_job(job_id: str, jd_text: str,
+              api_key: str = None) -> dict | None:
     """
     Score a job against candidate profile.
     
     Returns score dict or None if skipped/cached/budget exceeded.
+
+    Args:
+        job_id: Unique job identifier
+        jd_text: Full job description text
+        api_key: User's own Claude API key if set.
+                 If None, uses owner key with budget check.
     
     Flow:
     1. Cache check - already scored? Return None
     2. Keyword filter - passes basic check
     3. Load skill + context + resume
-    4. Call Claude 
+    4. Call Claude (with user key if provided)
     5. Parse result, save to database
     """
 
@@ -59,7 +80,6 @@ def score_job(job_id: str, jd_text: str) -> dict | None:
     #3. Load everything needed
     candidate_context = load_candidate_context()
     extended_expereince = load_extended_expereince()
-    base_resume = read_base_resume()
 
     prompt = render_skill(
         "score-job-fit",
@@ -84,6 +104,7 @@ def score_job(job_id: str, jd_text: str) -> dict | None:
             prompt=prompt,
             call_type="job_scoring",
             use_powerful_model=False #Haiku 
+            api_key=api_key #None = Owner key, str = user key
         )
 
         #Clean response
@@ -118,8 +139,8 @@ def score_job(job_id: str, jd_text: str) -> dict | None:
         gaps=result.get("gaps", [])
     )
 
-    print(f"  ✅ Score: {result['score']}/10 — {result['one_line_summary']}")
-    print(f"  Apply: {result.get('apply', False)} | "
+    logger.info(f"  ✅ Score: {result['score']}/10 — {result['one_line_summary']}")
+    logger.info(f"  Apply: {result.get('apply', False)} | "
           f"Priority: {result.get('priority', 'normal')}")
 
     return result
