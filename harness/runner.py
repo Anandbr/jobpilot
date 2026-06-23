@@ -184,7 +184,7 @@ def run_scan():
             chat_id = user["telegram_chat_id"]
             user_prefs = get_job_search_for_user(user["id"])
             user_candidate = get_candidate_for_user(user)
-            min_score = user.prefs.get("min_score", 7.0)
+            min_score = user_prefs.get("min_score", 7.0)
             user_locations = [
                 l.lower() for l in user_prefs.get("locations", [])
             ]    
