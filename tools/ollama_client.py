@@ -33,7 +33,7 @@ def call_ollama(prompt: str, expect_json: bool = False) -> str:
                     "num_predict": 500 #Limit output length
                 }
             },
-            timeout=30
+            timeout=60
         )
 
         if response.status_code != 200:

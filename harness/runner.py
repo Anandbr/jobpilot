@@ -11,8 +11,10 @@ from config.loader import get_job_search, get_job_search_for_user, get_candidate
 import threading
 import logging
 import json
+import os
 
 logger = logging.getLogger(__name__)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http:localhost:11434")
 
 def process_job_for_user(job: dict, user:dict,
                      user_candidate: dict, min_score: float) -> dict | None:
@@ -130,6 +132,21 @@ def run_scan():
     logger.info(f"\n{'='*50}")
     logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scan...")
     logger.info(f"{'='*50}")
+
+    # Pre-warm Ollama
+    try:
+        import requests as req
+        req.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), 
+                "prompt": "hi", 
+                "stream": False},
+            timeout=60
+        )
+        logger.info("[SCAN] Ollama warmed up")
+    except Exception as e:
+        logger.warning(f"[SCAN] Ollama warm-up failed: {e}")
+
 
     try:
         # Step 1 - Get all registered users
