@@ -103,7 +103,7 @@ def score_job(job_id: str, jd_text: str,
         response_text = call_claude(
             prompt=prompt,
             call_type="job_scoring",
-            use_powerful_model=False #Haiku 
+            use_powerful_model=False, #Haiku 
             api_key=api_key #None = Owner key, str = user key
         )
 
