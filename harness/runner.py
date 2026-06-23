@@ -71,7 +71,8 @@ def process_job_for_user(job: dict, user:dict,
     score_result = score_job(
         job_id=job_id,
         jd_text=jd_text,
-        api_key=api_key
+        api_key=api_key,
+        user=user
     )
 
     if not score_result:

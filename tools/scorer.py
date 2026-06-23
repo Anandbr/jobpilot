@@ -3,7 +3,10 @@ import logging
 from tools.database import job_already_scored, save_score, save_job
 from tools.claude_client import call_claude, BudgetExceededException
 from tools.resume_builder import read_base_resume
-from harness.skill_loader import render_skill, load_candidate_context, load_extended_expereince
+from harness.skill_loader import (
+    render_skill,load_candidate_context, load_extended_expereince,
+    load_candidate_context_for_user, load_extended_experience_for_user
+)
 from config.loader import get_job_search
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,8 @@ def quick_keyword_filter(jd_text: str, prefs: dict = None) -> bool:
     return True
 
 def score_job(job_id: str, jd_text: str,
-              api_key: str = None) -> dict | None:
+              api_key: str = None,
+              user: dict = None) -> dict | None:
     """
     Score a job against candidate profile.
     
@@ -58,6 +62,8 @@ def score_job(job_id: str, jd_text: str,
         jd_text: Full job description text
         api_key: User's own Claude API key if set.
                  If None, uses owner key with budget check.
+        user: User dict from DB. If None, falls back to 
+                owner files (candidate-context.md)
     
     Flow:
     1. Cache check - already scored? Return None
@@ -69,22 +75,29 @@ def score_job(job_id: str, jd_text: str,
 
     #1. Cache check
     if job_already_scored(job_id):
-        print(f" [CACHE] Already scored - skipping API call")
+        logger.debug(f"[SCORE] Cache hit | job_id={job_id[:8]}")
         return None
     
     #2. Keyword filter
     if not quick_keyword_filter(jd_text):
-        print(f" [FILTERED] Failed keyword check - skipping")
+        logger.debug(f"[SCORE] Failed keyword filter | job_id={job_id[:8]}")
         return None
     
-    #3. Load everything needed
-    candidate_context = load_candidate_context()
-    extended_expereince = load_extended_expereince()
+    #3. # Load context — from DB user row if available, else files
+    if user:
+        candidate_context = load_candidate_context_for_user(user)
+        extended_experience = load_extended_experience_for_user(user)
+    else:
+        candidate_context = load_candidate_context()
+        extended_experience = load_extended_expereince()
+
+    base_resume = read_base_resume()
 
     prompt = render_skill(
         "score-job-fit",
         candidate_context=candidate_context,
-        extended_experience=extended_expereince,
+        extended_experience=extended_experience if extended_experience 
+                        else "No additional experience context provided.",
         jd_text=jd_text
     )
 
