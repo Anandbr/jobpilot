@@ -113,6 +113,64 @@ def send_job_notification(job: dict, score_result: dict,
         print(f"  [TELEGRAM ERROR] {e}")
         return False
 
+def send_job_notification_to(chat_id: str, job: dict,
+                               score_result: dict) -> bool:
+    """
+    Send a job match notification to a SPECIFIC user.
+    Multi-user version of send_job_notification().
+    """
+    score = score_result.get("score", 0)
+    company = job.get("company", "Unknown")
+    title = job.get("title", "Unknown")
+    location = job.get("location", "Unknown")
+    url = job.get("url", "")
+
+    matches = score_result.get("strong_matches", [])[:3]
+    gaps = score_result.get("gaps", [])[:2]
+
+    matches_text = "\n".join(f"✅ {m}" for m in matches)
+    gaps_text = "\n".join(f"⚠️ {g}" for g in gaps)
+
+    message = (
+        f"🎯 <b>NEW JOB MATCH — {score}/10</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"🏢 {company}\n"
+        f"📍 {location}\n\n"
+        f"<b>Strong Matches:</b>\n{matches_text}\n\n"
+        f"<b>Gaps:</b>\n{gaps_text}\n\n"
+        f"🔗 <a href='{url}'>View Job</a>"
+    )
+
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ APPLY",
+             "callback_data": f"apply_{job['id']}"},
+            {"text": "❌ SKIP",
+             "callback_data": f"skip_{job['id']}"},
+            {"text": "👀 VIEW", "url": url}
+        ]]
+    }
+
+    try:
+        response = requests.post(
+            f"{BASE_URL}/sendMessage",
+            json={
+                "chat_id": str(chat_id),
+                "text": message,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard,
+                "disable_web_page_preview": False
+            },
+            timeout=10
+        )
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(
+            f"[NOTIFIER] send_job_notification_to failed | "
+            f"chat_id={chat_id} | error={e}"
+        )
+        return False
+
 
 def send_pdf(pdf_path: str, caption: str = "Your tailored resume") -> bool:
     """Send the tailored resume PDF."""

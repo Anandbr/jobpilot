@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import List, Dict
 from config.loader import get_job_search
 from tools.database import save_job, get_job
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 # LinkedIn RSS feed URLs for job searches
@@ -177,22 +181,37 @@ def fetch_job_description(url: str) -> str:
         return ""
 
 
-def scan_for_new_jobs() -> List[Dict]:
+def scan_for_new_jobs(combined_prefs: dict = None) -> List[Dict]:
     """
     Main function called by the monitoring loop.
     Fetches jobs, filters duplicates and irrelevant ones,
     returns only new relevant jobs.
+
+    Args:
+        combined_prefs: merged preferences across all users.
+            If None, falls back to preferences.json (owner only).
+            Keys used: locations, role_keywords, exclude_keywords
+
+    Why combined? — we scrape LinkedIn ONCE per cycle for ALL users.
+    A job matching ANY user's location/role passes this filter.
+    Per-user scoring in runner.py handles individual matching.
     """
     from tools.scorer import quick_keyword_filter
     from tools.ollama_client import quick_relevance_check
 
-    print("\n[SCAN] Checking for new jobs...")
+    logger.info("\n[SCAN] Checking for new jobs...")
+
+    #Use combined prefs if provided, else fallback to owner prefs
+    if combined_prefs is None:
+        combined_prefs = get_job_search()
+    
+    preferred_locations = [
+        l.lower() for l in combined_prefs.get("locations", [])
+    ]
 
     all_jobs = fetch_linkedin_jobs()
     new_jobs = []
     skipped = 0
-    prefs = get_job_search()
-    preferred_locations = [l.lower() for l in prefs.get("locations", [])]
 
     for job in all_jobs:
         # Skip if we already have this job
@@ -200,13 +219,15 @@ def scan_for_new_jobs() -> List[Dict]:
         if existing:
             continue
 
-        # Skip obviously non-US locations
+        #  Location filter — passes if matches ANY user's location
         job_location = job.get("location", "").lower()
         
         #Check if job location matches any preferred location
-        location_match = any(
-            preferred in job_location
-            for preferred in preferred_locations
+        location_match = (
+            not preferred_locations or  # no filter if empty
+            any(preferred in job_location
+                for preferred in preferred_locations) or
+            "remote" in job_location
         )
 
         if not location_match:
@@ -220,12 +241,12 @@ def scan_for_new_jobs() -> List[Dict]:
 
         try:
             if not quick_relevance_check(title, company):
-                print(f" [OLLAMA FILTER] Skipping: {title} at {company}")
+                logger.debug(f" [OLLAMA FILTER] Skipping: {title} at {company}")
                 skipped += 1
                 continue
         except Exception as e:
             #If Ollama is down - skip filter, continue normally
-            print(f" [OLLAMA WARNING] {e} - skipping pre-filter")
+            logger.warning(f" [OLLAMA WARNING] {e} - skipping pre-filter")
 
         # Fetch full JD first
         if job["url"]:
@@ -241,6 +262,6 @@ def scan_for_new_jobs() -> List[Dict]:
         save_job(job)
         new_jobs.append(job)
 
-    print(f"[SCAN] {len(new_jobs)} relevant new jobs | "
+    logger.info(f"[SCAN] {len(new_jobs)} relevant new jobs | "
           f"{skipped} skipped | {len(all_jobs)} total found")
     return new_jobs

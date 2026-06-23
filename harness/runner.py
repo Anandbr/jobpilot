@@ -5,55 +5,86 @@ from tools.job_scraper import scan_for_new_jobs
 from tools.scorer import score_job, quick_keyword_filter
 from tools.tailor_resume import tailor_resume
 from tools.notifier import send_job_notification, send_pdf, send_daily_summary, send_message
-from tools.database import update_job_status, get_api_spend_today
-from config.loader import get_job_search
+from tools.database import update_job_status, get_api_spend_today, get_connection
+from tools.registration import get_user_by_chat_id
+from config.loader import get_job_search, get_job_search_for_user, get_candidate_for_user
 import threading
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
-def process_job(job: dict) -> bool:
+def process_job_for_user(job: dict, user:dict,
+                     user_candidate: dict, min_score: float) -> dict | None:
     """
-    Score job and notify if high match.
-    Do NOT tailor automatically — wait for user to tap APPLY.
+    Score a job against a specific user's profile.
+    Returns score_result dict if above threshold, None if below.
+
+    Why separate from process_job? — the old function used
+    hardcoded global preferences. This one takes per-user
+    candidate and preferences explicitly.
     """
     job_id = job["id"]
     jd_text = job.get("jd_text", "")
 
     if not jd_text:
         logger.info(f" [SKIP] No JD text for {job['title']}")
-        return False
+        return None
+    
+    user_prefs = get_job_search_for_user(user["id"])
+    exclude_keywords = [
+        k.lower() for k in user_prefs.get("exclude_keywords", [])
+    ]
+    exclude_companies = [
+        c.lower() for c in user_prefs.get("exclude_companies", [])
+    ]
+
+    title_lower = job.get("title", "").lower()
+    company_lower = job.get("company", "").lower()
+
+    # Per-user exclusion filters — applied before hitting Claude
+    if any(kw in title_lower for kw in exclude_keywords):
+        logger.debug(
+            f"[SCORE] Excluded by keyword | "
+            f"job={job['title']} | user={user.get('name')}"
+        )
+        return None
+
+    if any(c in company_lower for c in exclude_companies):
+        logger.debug(
+            f"[SCORE] Excluded company | "
+            f"job={job['company']} | user={user.get('name')}"
+        )
+        return None
     
     # Score it
-    logger.info(f"\n Processing: {job['title']} at {job['company']}")
+    logger.info(
+        f"[SCORE] Scoring | "
+        f"job={job['title']} at {job['company']} | "
+        f"user={user.get('name', 'unknown')}"
+    )
     score_result = score_job(job_id=job_id, jd_text=jd_text)
 
     if not score_result:
-        return False
+        return None
     
     score = score_result.get("score", 0)
-    min_score = get_job_search().get("min_score", 7.0)
 
     #Below threshold - skip
     if score < min_score:
-        logger.info(f" [LOW_SCORE] {score}/10 - below threshold {min_score}")
+        logger.info(
+            f"[SCORE] Below threshold | "
+            f"score={score}/{min_score} | job={job['title']}"
+        )
         update_job_status(job_id, "low_score")
-        return False
+        return None
 
-    logger.info(f" [HIGH_MATCH] {score}/10 - notifying user...")
-
-    # Just notify — no tailoring yet
-    sent = send_job_notification(
-        job=job,
-        score_result=score_result
+    logger.info(
+        f"[SCORE] Match | score={score}/10 | "
+        f"job={job['title']} | user={user.get('name', 'unknown')}"
     )
 
-    if sent:
-        update_job_status(job_id, "notified")
-        logger.info(f"  ✅ Notified: {job['title']}")
-        return True
-
-    return False
+    return score_result
 
 
     # #Tailor resume
@@ -87,42 +118,189 @@ def process_job(job: dict) -> bool:
     
 def run_scan():
     """
-    One full scan cycle.
-    Find jobs -> process each one -> notify on matches
+    One full scan cycle for ALL registered users.
+
+    Flow:
+    1. Get all registered users with their preferences
+    2. Build combined search terms (scrape LinkedIn once)
+    3. Score each job against each user's profile
+    4. Notify each user of their matches
+    5. Increment free tier counter per user
     """
     logger.info(f"\n{'='*50}")
     logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Starting scan...")
     logger.info(f"{'='*50}")
 
     try:
-        #Find new jobs
+        # Step 1 - Get all registered users
+        conn = get_connection()
+        conn.row_factory = __import__('sqlite3').Row
+        cursor = conn.cursor()
+        cursor.execute("""SELECT * FROM users WHERE registration_status = 'complete'""")
+        users = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        if not users:
+            logger.info("[SCAN] No registered user(s) - skipping")
+            return
+        
+        logger.info(f"[SCAN] {len(users)} registered user(s)")
+
+        # Step. 2 - Build combined preferences across all users
+        # This is what gets passed on to linkedin scraper
+        # Union of all Users' locations and role keywords
+        all_locations = set()
+        all_keywords = set()
+
+        for user in users:
+            prefs = get_job_search_for_user(user["id"])
+            for loc in prefs.get("locations", []):
+                all_locations.add(loc)
+            for kw in prefs.get("role_keywords", []):
+                all_keywords.add(kw)
+
+        combined_prefs = {
+            "locations": list(all_locations),
+            "role_keywords": list(all_keywords)
+        }
+
+        logger.info(
+            f"[SCAN] Combined prefs | "
+            f"locations={len(all_locations)} | "
+            f"keywords={len(all_keywords)}"
+        )
+
+        # Step 3 — Scrape LinkedIn ONCE with combined prefs
         new_jobs = scan_for_new_jobs()
 
         if not new_jobs:
             print("[SCAN] No new jobs found this cycle")
             return
         
-        #Process each job
-        notified = 0
-        for job in new_jobs:
-            try:
-                if process_job(job):
-                    notified += 1
-                    time.sleep(2) #Small delay between notifications
-            except Exception as e:
-                logger.error(f" [ERROR] Failed to process {job.get('title')}: {e}")
+        logger.info(f"[SCAN] {len(new_jobs)} new jobs to process")
+
+        # Step 4 - Score each job against each user
+        for user in users:
+            chat_id = user["telegram_chat_id"]
+            user_prefs = get_job_search_for_user(user["id"])
+            user_candidate = get_candidate_for_user(user)
+            min_score = user.prefs.get("min_score", 7.0)
+            user_locations = [
+                l.lower() for l in user_prefs.get("locations", [])
+            ]    
+
+            #Check for free tier
+            free_used = user.get("free_scan_runs_used", 0)
+            free_cap = user.get("free_scan_runs_cap", 3)
+            has_api_key = bool(user.get("calude-api_key_encrypted"))
+
+            if not has_api_key and free_used >= free_cap:
+                logger.info(
+                    f"[SCAN] Free tier exhausted | "
+                    f"chat_id={chat_id} | used={free_used}/{free_cap}"
+                )
+                # Notify user once (not every cycle)
+                # TODO: track whether we've already sent this notification
                 continue
         
-        logger.info(f"\n[SCAN COMPLETE] {notified} notifications sent "
-              f"out pf {len(new_jobs)} new jobs")
+            #Process each job
+            notified = 0
+            for job in new_jobs:
+                # Check if this job matches THIS user's location prefs
+                job_location = job.get("location", "").lower()
+                location_match = (
+                    not user_locations or
+                    any(loc in job_location for loc in user_locations) or
+                    "remote" in job_location
+                )
 
-        #Check budget
+                if not location_match:
+                    continue
+
+                #Score against this user's profile
+                try:
+                    score_result = process_job_for_user(
+                        job=job,
+                        user=user,
+                        user_candidate=user_candidate,
+                        min_score=min_score
+                    )
+
+                    if score_result:
+                        # Notify this specific user
+                        from tools.notifier import send_job_notification_to
+                        send_job_notification_to(
+                            chat_id=chat_id,
+                            job=job,
+                            score_result=score_result
+                        )
+                        notified += 1
+                        time.sleep(2)
+                except Exception as e:
+                    logger.error(
+                        f"[SCAN] Error processing job for user | "
+                        f"chat_id={chat_id} | "
+                        f"job={job.get('title')} | error={e}"
+                    )
+                    continue
+            
+            # Increment free tier counter for this user
+            if not has_api_key:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE users
+                    SET free_scan_runs_used = free_scan_runs_used + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (user["id"],))
+                conn.commit()
+                conn.close()
+
+                new_used = free_used + 1
+                remaining = free_cap - new_used
+
+                logger.info(
+                    f"[SCAN] Free tier incremented | "
+                    f"chat_id={chat_id} | "
+                    f"used={new_used}/{free_cap}"
+                )
+
+                if remaining == 1:
+                    from tools.notifier import send_message_to
+                    send_message_to(
+                        chat_id,
+                        "⚠️ <b>Last free scan</b>\n\n"
+                        "This was your second-to-last free scan run.\n"
+                        "Add your Claude API key with /set-api-key "
+                        "to keep getting job matches."
+                    )
+                elif remaining == 0:
+                    from tools.notifier import send_message_to
+                    send_message_to(
+                        chat_id,
+                        "🔒 <b>Free tier used up</b>\n\n"
+                        "You've used all 3 free scan runs.\n"
+                        "Add your Claude API key with /set-api-key "
+                        "to continue getting job matches.\n\n"
+                        "Get a key at: https://console.anthropic.com"
+                    )
+
+            logger.info(
+                f"[SCAN] User complete | "
+                f"chat_id={chat_id} | notified={notified}"
+            )
+
+        logger.info(f"[SCAN] Cycle complete | users={len(users)}")
+
+        # Budget check
         spend = get_api_spend_today()
-        logger.info(f"[BUDGET] Total API spend today: ${spend:.4f}")
+        logger.info(f"[BUDGET] API spend today: ${spend:.4f}")
 
     except Exception as e:
-        logger.error(f"[SCAN_ERROR] {e}")
-        send_message(f"⚠️ JobPilot scan error: {e}")
+        logger.error(f"[SCAN ERROR] {e}")
+        from tools.notifier import send_message
+        send_message(f"⚠️ JobPilot scan error: {e}")       
 
 def send_evening_summary():
     """Send daily summary at 8pm."""
