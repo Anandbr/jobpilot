@@ -421,7 +421,11 @@ def handle_registration_message(chat_id: str, text: str, document=None) -> str:
             #So we can download it when needed
             file_id = document.get("file_id", "")
             save_resume_path(chat_id, file_id)
-            return _completion_message()
+            updated_user = get_user_by_chat_id(chat_id)
+            next_step = updated_user.get("registration_step")
+            if next_step == "complete":
+                return _completion_message()
+            return get_question_for_step(next_step)
         else:
             return(
                 "Please send your resume as a PDF file — "
