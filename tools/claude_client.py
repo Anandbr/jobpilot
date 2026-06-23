@@ -112,13 +112,6 @@ def call_claude(prompt: str, call_type: str,
         else budget["scoring_model"]
     )
 
-    # Make the API call
-    response = claude.messages.create(
-        model=model,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
     # Get the right client
     claude = _get_client(api_key)
 
