@@ -113,7 +113,7 @@ def call_claude(prompt: str, call_type: str,
     )
 
     # Make the API call
-    response = client.messages.create(
+    response = claude.messages.create(
         model=model,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
