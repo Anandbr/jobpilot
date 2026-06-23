@@ -417,10 +417,36 @@ def handle_registration_message(chat_id: str, text: str, document=None) -> str:
     #Handle resume upload step (expects a PDF document)
     if current_step == "base_resume":
         if document:
-            #Save path - in V1 we store file_id from telegram
-            #So we can download it when needed
             file_id = document.get("file_id", "")
-            save_resume_path(chat_id, file_id)
+
+            #Download PDF from Telegram to disk
+            #Store real path. not file_id
+            from tools.notifier import download_telegram_file
+
+            user = get_user_by_chat_id(chat_id)
+            user_id = user["id"] if user else chat_id
+
+            #Save to data/resumes/{user_id}/base_resume.pdf
+            save_path = f"data/resumes/{user_id}/base_resume.pdf"
+
+            downloaded = download_telegram_file(file_id, save_path)
+            if downloaded:
+                save_resume_path(chat_id, save_path)
+                logger.info(
+                    f"[REGISTRATION] Resume downloaded | "
+                    f"chat_id={chat_id} | path={save_path}"
+                )
+            else:
+                logger.warning(
+                    f"[REGISTRATION] Resume download failed, "
+                    f"string file_id | chat_id={chat_id}"
+                )
+                return (
+                    "⚠️ I received your resume but had trouble saving it. "
+                    "Please try uploading again."
+                )
+            
+            #Advance to next step
             updated_user = get_user_by_chat_id(chat_id)
             next_step = updated_user.get("registration_step")
             if next_step == "complete":

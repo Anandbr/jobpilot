@@ -2,6 +2,7 @@ import os
 import requests
 from dotenv import load_dotenv
 import logging
+from pathlib import Path
 from tools.registration import (
     handle_registration_message,
     is_registered,
@@ -203,6 +204,66 @@ def send_daily_summary(stats: dict) -> bool:
         f"Keep going Anand! 💪"
     )
     return send_message(message)
+
+def download_telegram_file(file_id: str, save_path: str) -> bool:
+    """
+    Download a file from Telegram using its file_id.
+    Saves to save_path onloacl_disk.
+
+    telegram stores uploaded files on their servers.
+    file_id is just a reference. to actually use the file
+    (to upload to ATS or to read it while scoring), we need real bytes on disk.
+
+    Returns True if downloaded successfully.
+    """
+    import requests as req
+
+    try:
+        #Step 1 - Get the file path from Telegram
+        response = req.get(
+            f"{BASE_URL}/getFile",
+            params={"file_id": file_id},
+            timeout=10
+        )
+        data = response.json()
+
+        if not data.get("ok"):
+            logger.error(
+                f"[TELEGRAM] getFile failed | "
+                f"file_id={file_id[:20]} | response={data}"
+            )
+            return False
+        
+        file_path = data["result"]["file_path"]
+
+        # Step 2 - Download actual file bytes
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        download_url = (
+            f"https://api.telegram.org/file/bot{token}/{file_path}"
+        )
+
+        file_response = req.get(download_url, timeout=30)
+        if file_response.status_code != 200:
+            logger.error(
+                f"[TELEGRAM] Download failed | "
+                f"status={file_response.status_code}"
+            )
+            return False
+        
+        # Step 3 - Save to disk
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, "wb") as f:
+            f.write(file_response.content)
+        
+        logger.info(
+            f"[TELEGRAM] File downloaded | "
+            f"path={save_path} | "
+            f"size={len(file_response.content)} bytes"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"[TELEGRAM] Download error | error={e}")
+        return False
 
 def send_apply_confirmation(job: dict) -> bool:
     """Send final confirmation buttons after screenshot is sent."""
@@ -636,7 +697,24 @@ def _handle_update_value_received(chat_id: str, field: str,
                 "tap the 📎 attachment button."
             )
             return
-        value = document.get("file_id", "")
+        
+        file_id = document.get("file_id", "")
+
+        #Get user_id for path
+        from tools.registration import get_user_by_chat_id
+        user = get_user_by_chat_id(chat_id)
+        user_id = user["id"] if user else chat_id
+
+        save_path = f"data/resumes/{user_id}/base_resume.pdf"
+        downloaded = download_telegram_file(file_id, save_path)
+
+        if not downloaded:
+            send_message_to(
+                chat_id,
+                "⚠️ Failed to save your resume — please try again."
+            )
+            return
+        value = save_path
     else:
         if not text or not text.strip():
             send_message_to(chat_id, "I didn't get that - please try again.")
