@@ -2,7 +2,9 @@ import sqlite3
 import json
 from datetime import date
 from pathlib import Path
+import logging
 
+logger = logging.getLogger(__name__)
 DB_PATH = Path(__file__).parent.parent / "data" / "jobs.db"
 
 def get_connection():
@@ -161,6 +163,36 @@ def init_users_table():
     print("  [DB] Multi-user tables ready")
     
 
+def init_job_preferences_table():
+    """
+    Creates job_preferences table if it doesn't exist.
+    One row per user - stores what jobs to search for.
+    Seperate from users table because preferences change
+    more frequently than profile data.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # JOB PREFERENCES Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS job_preferences (
+            user_id TEXT PRIMARY KEY REFERENCES users(id),
+            target_roles TEXT DEFAULT '[]',
+            locations TEXT DEFAULT '[]',
+            role_keywords TEXT DEFAULT '[]',
+            exclude_keywords TEXT DEFAULT '[]',
+            exclude_companies TEXT DEFAULT '[]',
+            min_salary INTEGER DEFAULT 0,
+            min_score REAL DEFAULT 7.0,
+            h1b_sponsorship_required INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+    """)
+
+    conn.commit()
+    conn.close()
+    logger.info(" [DB] job_preferences table ready")
 
 # --------------------JOB FUNCTIONS---------------------------
 
@@ -244,6 +276,89 @@ def update_job_status(job_id: str, status: str):
     conn.commit()
     conn.close()
 
+def get_job_preferences(user_id: str) -> dict:
+    """
+    GET job prefences for a user.
+    Returns dict woth all preferences fields.
+    Returns defaults if no preferences set yet.
+    """
+    import json
+    
+    conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM job_preferences WHERE user_id = ?",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {
+            "target_roles": [],
+            "locations": [],
+            "role_keywords": [],
+            "exclude_keywords": [],
+            "exclude_companies": [],
+            "min_salary": 0,
+            "min_score": 7.0,
+            "h1b_sponsorship_required": False
+        }
+
+    return {
+        "target_roles": json.loads(row["target_roles"] or "[]"),
+        "locations": json.loads(row["locations"] or "[]"),
+        "role_keywords": json.loads(row["role_keywords"] or "[]"),
+        "exclude_keywords": json.loads(row["exclude_keywords"] or "[]"),
+        "exclude_companies": json.loads(row["exclude_companies"] or "[]"),
+        "min_salary": row["min_salary"] or 0,
+        "min_score": row["min_score"] or 7.0,
+        "h1b_sponsorship_required": bool(row["h1b_sponsorship_required"])
+    }
+
+def save_job_preferences(user_id: str, preferences: dict):
+    """
+    Insert or update job preferences for a user.
+    Uses INSERT OR REPLACE so it works for both.
+    first time setup and subsequent updates.
+    """
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO job_preferences (
+        user_id, target_roles, locations,
+        role_keywords, exclude_keywords, exclude_companies,
+        min_salary, min_score, h1b_sponsorship_required,
+        updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE SET
+        target_roles = excluded.target_roles,
+        locations = excluded.locations,
+        role_keywords = excluded.role_keywords,
+        exclude_keywords = excluded.exclude_keywords,
+        exclude_companies = excluded.exclude_companies,
+        min_salary = excluded.min_salary,
+        min_score = excluded.min_score,
+        h1b_sponsorship_required = excluded.h1b_sponsorship_required,
+        updated_at = CURRENT_TIMESTAMP
+        """, (
+        user_id,
+        json.dumps(preferences.get("target_roles", [])),
+        json.dumps(preferences.get("locations", [])),
+        json.dumps(preferences.get("role_keywords", [])),
+        json.dumps(preferences.get("exclude_keywords", [])),
+        json.dumps(preferences.get("exclude_companies", [])),
+        preferences.get("min_salary", 0),
+        preferences.get("min_score", 7.0),
+        1 if preferences.get("h1b_sponsorship_required") else 0
+    ))
+    conn.commit()
+    conn.close()
+    logger.info(f"[DB] Job preferences saved | user_id={user_id}")
+
+
 # --------------------API USAGE FUNCTIONS---------------------------
 
 def log_api_call(tokens: int, cost: float, call_type: str):
@@ -300,3 +415,4 @@ def get_resume_for_job(job_id: str) -> dict | None:
 # --------------------INITIALIZE ON IMPORT---------------------------
 initialze_database()
 init_users_table()
+init_job_preferences_table()

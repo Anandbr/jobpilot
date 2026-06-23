@@ -21,7 +21,9 @@ import uuid
 import logging
 import time
 from prometheus_client import Counter, Histogram
-from tools.database import get_connection
+from tools.database import (
+    get_connection, get_job_preferences, save_job_preferences
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,10 +131,39 @@ REGISTRATION_STEPS = [
         ),
         "required": True
     },
+    {
+    "key": "job_titles",
+    "question": (
+        "Almost done! What job titles are you targeting?\n\n"
+        "Send them separated by commas:\n"
+        "e.g. AI Engineer, ML Engineer, Software Engineer\n\n"
+        "I'll search LinkedIn for these roles daily."
+    ),
+    "required": True
+    },
+    {
+        "key": "job_locations",
+        "question": (
+            "Which locations are you open to?\n\n"
+            "Send them separated by commas:\n"
+            "e.g. Remote, Seattle, San Francisco, New York\n\n"
+            "Include 'Remote' if you're open to remote roles."
+        ),
+        "required": True
+    },
 ]
 
 # Build a flat ordered list of step keys for easy navigation
 STEP_KEYS = [s["key"] for s in REGISTRATION_STEPS]
+
+# Maps step key → DB column name, only when they differ.
+# Steps not listed here use the key name directly as the column.
+STEP_KEY_TO_COLUMN = {
+    "base_resume": "base_resume",
+    # job pref steps handled separately — not in users table
+    "job_titles": None,
+    "job_locations": None,
+}
 
 # ============================================================
 # DATABASE HELPERS
@@ -176,9 +207,14 @@ def create_user(chat_id: str) -> dict:
 
     return get_user_by_chat_id(chat_id)
 
+# Steps that save to job_preferences, not users table
+JOB_PREF_STEPS = {"job_titles", "job_locations"}
+
 def save_registration_field(chat_id: str, field: str, value:str):
     """
-    Save a single field to the user's row and advance to next step.
+    Save a single field from registration and advance to next step.
+    Most fields go to users table.
+    job_titles and job_locations go to job_preferences table.
     Also records how long this step took (for metrics).
     """
     # Get current user to find timing info
@@ -210,19 +246,68 @@ def save_registration_field(chat_id: str, field: str, value:str):
     else:
         logger.error(f"[REGISTRATION] Unknown field: {field}")
         return
+    
+    # Job preference steps -> job_preferences table
+    if field in JOB_PREF_STEPS:
+        prefs = get_job_preferences(user["id"])
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        UPDATE users 
-        SET {field} = ?,
-            registration_step = ?,
-            registration_status = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE telegram_chat_id = ?
-    """, (value, next_step, new_status, str(chat_id)))
-    conn.commit()
-    conn.close()
+        if field == "job_titles":
+            #Parse comma-seperated titles into a list
+            titles = [t.strip() for t in value.split(",") if t.strip()]
+            # Auto generated role_keywords from titles
+            keywords = [t.lower() for t in titles]
+            prefs["target_roles"] = titles
+            prefs["role_keywords"] = keywords
+        
+        elif field == "job_locations":
+            locations = [l.strip() for l in value.split(",") if l.strip()]
+            prefs["locations"] = locations
+        
+        save_job_preferences(user["id"], prefs)
+
+        #Infer h1b sponsorships from visa status
+        visa = user.get("visa_status", "").lower()
+        if "h1b" in visa or "sponsorship" in visa:
+            prefs["h1b_sponsorship_required"] = True
+            save_job_preferences(user["id"], prefs)
+        
+        # Still advance registration_step in users table
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE users
+            SET registration_step = ?,
+                registration_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE telegram_chat_id = ?
+        """, (next_step, new_status, str(chat_id)))
+        conn.commit()
+        conn.close()
+
+    #All other steps
+    else:
+        db_column = STEP_KEY_TO_COLUMN.get(field, field)    
+
+        # Safety guard — should never happen if JOB_PREF_STEPS
+        # is handled correctly above
+        if db_column is None:
+            logger.error(
+                f"[REGISTRATION] db_column is None for field={field} "
+                f"— this step should have been caught earlier"
+            )
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            UPDATE users 
+            SET {db_column} = ?,
+                registration_step = ?,
+                registration_status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE telegram_chat_id = ?
+        """, (value, next_step, new_status, str(chat_id)))
+        conn.commit()
+        conn.close()
 
     logger.info(
         f"[REGISTRATION] Step saved | chat_id={chat_id} | "
