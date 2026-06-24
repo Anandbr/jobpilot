@@ -1075,7 +1075,7 @@ def _handle_help(chat_id: str) -> None:
         "<b>Profile</b>\n"
         "/profile — view your current profile\n"
         "/profile_update — update any profile field\n"
-        "/experienceupdate — add work experience context\n"
+        "/experience_update — add work experience context\n"
         "/experience_reset — wipe experience and start fresh\n\n"
         "<b>API Key</b>\n"
         "/set_api_key — add your Claude API key\n"
