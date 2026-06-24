@@ -192,8 +192,10 @@ def send_pdf(pdf_path: str, caption: str = "Your tailored resume") -> bool:
         return False
 
 
-def send_daily_summary(stats: dict) -> bool:
-    """Send end of day summary."""
+def send_daily_summary(chat_id: str, stats: dict,
+                        user_name: str = "") -> bool:
+    """Send end of day summary to a specific user."""
+    greeting = f"Keep going {user_name}! 💪" if user_name else "Keep going! 💪"
     message = (
         f"📊 <b>JobPilot Daily Report</b>\n\n"
         f"Jobs scanned: {stats.get('scanned', 0)}\n"
@@ -201,9 +203,9 @@ def send_daily_summary(stats: dict) -> bool:
         f"Applied: {stats.get('applied', 0)}\n"
         f"Skipped: {stats.get('skipped', 0)}\n"
         f"API spend today: ${stats.get('api_spend', 0):.3f}\n\n"
-        f"Keep going Anand! 💪"
+        f"{greeting}"
     )
-    return send_message(message)
+    return send_message_to(chat_id, message)
 
 def download_telegram_file(file_id: str, save_path: str) -> bool:
     """
@@ -797,102 +799,105 @@ def _handle_update_value_received(chat_id: str, field: str,
     )    
 
 def handle_callback(callback_query: dict) -> None:
-    """
-    Handle button taps from Telegram.
-    Called when user taps APPLY or SKIP.
-    """
+    """Handle button taps from Telegram."""
     data = callback_query.get("data", "")
     callback_id = callback_query.get("id")
 
-    #Acknowledge the callback immediately
+    # Extract chat_id from callback — used for per-user routing
+    chat_id = str(
+        callback_query.get("message", {})
+        .get("chat", {})
+        .get("id", os.getenv("TELEGRAM_CHAT_ID"))
+    )
+
+    # Acknowledge immediately
     requests.post(
         f"{BASE_URL}/answerCallbackQuery",
         json={"callback_query_id": callback_id},
         timeout=5
     )
-    
-    print(f"[CALLBACK] Received: '{data}'")
+
+    logger.info(f"[CALLBACK] Received: '{data}' | chat_id={chat_id}")
 
     if data.startswith("confirm_experience_reset_"):
-        chat_id = data.replace("confirm_experience_reset_", "")
+        target_chat_id = data.replace("confirm_experience_reset_", "")
         from tools.database import get_connection
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE users 
+            UPDATE users
             SET extended_experience = '',
                 pending_confirmation = NULL,
                 updated_at = CURRENT_TIMESTAMP
             WHERE telegram_chat_id = ?
-        """, (chat_id,))
+        """, (target_chat_id,))
         conn.commit()
         conn.close()
-        logger.info(f"[EXPERIENCE] Reset | chat_id={chat_id}")
-        send_message_to(chat_id, "✅ Experience reset. Start fresh with /experience-update")
+        logger.info(f"[EXPERIENCE] Reset | chat_id={target_chat_id}")
+        send_message_to(target_chat_id,
+            "✅ Experience reset. Start fresh with /experience-update")
 
     elif data.startswith("cancel_experience_reset_"):
-        chat_id = data.replace("cancel_experience_reset_", "")
-        send_message_to(chat_id, "Cancelled — your experience is unchanged.")
-    
+        target_chat_id = data.replace("cancel_experience_reset_", "")
+        send_message_to(target_chat_id,
+            "Cancelled — your experience is unchanged.")
+
     elif data.startswith("update_field_"):
-        # format: "update_field_{field}|{chat_id}"
         without_prefix = data.replace("update_field_", "")
-        field, chat_id = without_prefix.split("|", 1)
-        _handle_update_field_selected(chat_id, field)
+        field, target_chat_id = without_prefix.split("|", 1)
+        _handle_update_field_selected(target_chat_id, field)
 
     elif data.startswith("update_more_|"):
-        chat_id = data.replace("update_more_|", "")
-        _handle_profile_update(chat_id)
+        target_chat_id = data.replace("update_more_|", "")
+        _handle_profile_update(target_chat_id)
 
     elif data.startswith("update_done_|"):
-        chat_id = data.replace("update_done_|", "")
-        send_message_to(
-            chat_id,
-            "✅ Profile saved.\n\nUse /profile to review your details."
-        )
-    
+        target_chat_id = data.replace("update_done_|", "")
+        send_message_to(target_chat_id,
+            "✅ Profile saved.\n\nUse /profile to review your details.")
+
     elif data.startswith("apply_"):
         job_id = data.replace("apply_", "")
-        send_message(f"✅ Got it! Tailoring resume for job {job_id[:8]}...")
-        _handle_apply(job_id)
+        send_message_to(chat_id,
+            f"✅ Got it! Tailoring resume for job {job_id[:8]}...")
+        _handle_apply(job_id, chat_id)
 
     elif data.startswith("skip_"):
         job_id = data.replace("skip_", "")
-        send_message(f"⏭️ Skipped job {job_id[:8]}")
+        send_message_to(chat_id, f"⏭️ Skipped job {job_id[:8]}")
         _handle_skip(job_id)
 
     elif data.startswith("confirm_"):
         job_id = data.replace("confirm_", "")
-        send_message("🚀 Submitting application...")
-        _handle_confirm_submit(job_id)
+        send_message_to(chat_id, "🚀 Starting application...")
+        _handle_confirm_submit(job_id, chat_id)
 
     elif data.startswith("continue_"):
         job_id = data.replace("continue_", "")
-        send_message("✅ Continuing application...")
         from tools.database import get_job
-        from pathlib import Path
         from tools.apply import apply_to_job
+        from tools.registration import get_user_by_chat_id
         job = get_job(job_id)
+        user = get_user_by_chat_id(chat_id)
         pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
         if job and pdf_path.exists():
-            apply_to_job(job=job, pdf_path=str(pdf_path))
+            send_message_to(chat_id, "✅ Continuing application...")
+            apply_to_job(job=job, pdf_path=str(pdf_path),
+                        user=user, chat_id=chat_id)
         else:
-            send_message("❌ Job or resume not found")
-    
-    
+            send_message_to(chat_id, "❌ Job or resume not found")
+
     elif data.startswith("modify_"):
-        job_id = data.replace("modify", "")
-        send_message(
-            f"✏️ Resume modification coming soon!\n\n"
-            f"For now — tap CONFIRM SUBMIT to proceed with "
-            f"the current tailored resume, or CANCEL to skip."
-        )
-    
+        send_message_to(chat_id,
+            "✏️ Resume modification coming soon!\n\n"
+            "For now — tap CONFIRM SUBMIT to proceed with "
+            "the current tailored resume, or CANCEL to skip.")
+
     elif data.startswith("cancel_"):
         job_id = data.replace("cancel_", "")
         from tools.database import update_job_status
         update_job_status(job_id, "skipped")
-        send_message(f"❌ Application cancelled.")
+        send_message_to(chat_id, "❌ Application cancelled.")
 
     elif data.startswith("applied_"):
         job_id = data.replace("applied_", "")
@@ -900,75 +905,81 @@ def handle_callback(callback_query: dict) -> None:
         job = get_job(job_id)
         update_job_status(job_id, "applied")
         if job:
-            send_message(
+            send_message_to(chat_id,
                 f"✅ <b>Logged as applied!</b>\n\n"
                 f"<b>{job['title']}</b> at <b>{job['company']}</b>\n\n"
-                f"Good luck! 🤞"
-            )
-    
+                f"Good luck! 🤞")
+
     elif data.startswith("submit_"):
         job_id = data.replace("submit_", "")
-        send_message("🚀 Submitting now...")
         from tools.apply import submit_application
         from tools.database import update_job_status, get_job
         job = get_job(job_id)
+        send_message_to(chat_id, "🚀 Submitting now...")
         if job:
             result = submit_application(job_id)
             if result:
                 update_job_status(job_id, "applied")
-                send_message(
+                send_message_to(chat_id,
                     f"✅ Application submitted!\n"
                     f"<b>{job['title']}</b> at <b>{job['company']}</b>\n"
-                    f"Good luck! 🤞"
-                )
+                    f"Good luck! 🤞")
             else:
-                send_message(f"❌ Submit failed — apply manually\n{job.get('url', '')}")
+                send_message_to(chat_id,
+                    f"❌ Submit failed — apply manually\n"
+                    f"{job.get('url', '')}")
 
-def _handle_confirm_submit(job_id: str):
+def _handle_confirm_submit(job_id: str, chat_id: str):
     """
     User tapped CONFIRM — start filling the form.
     Does NOT submit yet — waits for second confirmation.
     """
     from tools.database import get_job
     from tools.apply import apply_to_job
-    from pathlib import Path
+    from tools.registration import get_user_by_chat_id
 
     job = get_job(job_id)
     if not job:
-        send_message("❌ Job not found in database")
+        send_message_to(chat_id, "❌ Job not found in database")
         return
 
     pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
     if not pdf_path.exists():
-        send_message(f"❌ Resume PDF not found")
+        send_message_to(chat_id, "❌ Resume PDF not found")
         return
 
-    send_message(
+    user = get_user_by_chat_id(chat_id)
+
+    send_message_to(
+        chat_id,
         f"🤖 Filling application form for\n"
         f"<b>{job['title']}</b> at <b>{job['company']}</b>\n\n"
         f"Will send screenshot when ready..."
     )
 
-    # Fill the form — does NOT submit
-    apply_to_job(job=job, pdf_path=str(pdf_path))
+    apply_to_job(
+        job=job,
+        pdf_path=str(pdf_path),
+        user=user,
+        chat_id=chat_id
+    )
 
-def _handle_apply(job_id: str) -> None:
+def _handle_apply(job_id: str, chat_id: str) -> None:
     """Tailor resume and prepare application when user taps APPLY."""
     from tools.database import get_job
     from tools.tailor_resume import tailor_resume
-    from tools.apply import apply_to_job
     from pathlib import Path
     import json
 
     job = get_job(job_id)
     if not job:
-        send_message(f"❌ Job {job_id[:8]} not found in database")
+        send_message_to(chat_id,
+            f"❌ Job {job_id[:8]} not found in database")
         return
-    
-    send_message(f"🎨 Tailoring resume for {job['title']} at {job['company']}...")
 
-    # Get existing score from database
-    import json
+    send_message_to(chat_id,
+        f"🎨 Tailoring resume for {job['title']} at {job['company']}...")
+
     score_result = {
         "score": job.get("score", 8),
         "recommendation": job.get("score_reasoning", ""),
@@ -977,7 +988,6 @@ def _handle_apply(job_id: str) -> None:
         "transferable": []
     }
 
-    # Tailor resume
     tailored = tailor_resume(
         job_id=job_id,
         jd_text=job.get("jd_text", ""),
@@ -985,65 +995,53 @@ def _handle_apply(job_id: str) -> None:
     )
 
     if not tailored:
-        send_message("❌ Resume tailoring failed")
+        send_message_to(chat_id, "❌ Resume tailoring failed")
         return
-    
-    # Send PDF
+
     pdf_path = Path(f"data/tailored_resumes/{job_id[:8]}_resume.pdf")
-    print(f"  [PDF] Looking for: {pdf_path}")
-    print(f"  [PDF] Exists: {pdf_path.exists()}")
+    logger.info(f"[PDF] Looking for: {pdf_path} | exists={pdf_path.exists()}")
 
     if pdf_path.exists():
-        result = send_pdf(
-            str(pdf_path),
-            caption=f"📄 Tailored for {job['title']} at {job['company']}"
-        )
-        print(f"  [PDF] Send result: {result}")
+        # Send PDF to this specific user
+        try:
+            with open(str(pdf_path), "rb") as f:
+                requests.post(
+                    f"{BASE_URL}/sendDocument",
+                    data={
+                        "chat_id": str(chat_id),
+                        "caption": f"📄 Tailored for {job['title']} at {job['company']}"
+                    },
+                    files={"document": f},
+                    timeout=30
+                )
+        except Exception as e:
+            logger.error(f"[PDF] Send failed | error={e}")
     else:
-        send_message("⚠️ PDF not found — resume text was generated but PDF conversion may have failed") 
+        send_message_to(chat_id,
+            "⚠️ PDF not found — resume text generated but PDF conversion may have failed")
+
     from tools.database import update_job_status
     update_job_status(job_id, "ready_to_apply")
 
-    message = (
-        f"✅ Resume ready!\n\n"
-        f"<b>{job['title']}</b> at <b>{job['company']}</b>\n"
-        f"🔗 {job.get('url', '')}\n\n"
-        f"Next: OpenClaw will handle the application.\n"
-        f"Tap below to confirm submission."
-    )
-
     keyboard = {
         "inline_keyboard": [[
-            {
-                "text": "🚀 CONFIRM SUBMIT",
-                "callback_data": f"confirm_{job_id}"
-            },
-            {
-                "text": "✏️ MODIFY RESUME",
-                "callback_data": f"modify_{job_id}"
-            },
-            {
-                "text": "❌ CANCEL",
-                "callback_data": f"cancel_{job_id}"
-            }
+            {"text": "🚀 CONFIRM SUBMIT",
+             "callback_data": f"confirm_{job_id}"},
+            {"text": "✏️ MODIFY RESUME",
+             "callback_data": f"modify_{job_id}"},
+            {"text": "❌ CANCEL",
+             "callback_data": f"cancel_{job_id}"}
         ]]
     }
 
-    try:
-        requests.post(
-            f"{BASE_URL}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML",
-                "reply_markup": keyboard,
-                "disable_web_page_preview": False
-            },
-            timeout=10
-        )
-    except Exception as e:
-        print(f"  [TELEGRAM ERROR] {e}")
-
+    send_message_to(
+        chat_id,
+        f"✅ Resume ready!\n\n"
+        f"<b>{job['title']}</b> at <b>{job['company']}</b>\n"
+        f"🔗 {job.get('url', '')}\n\n"
+        f"Tap below to confirm submission.",
+        keyboard=keyboard
+    )
 
 def _handle_skip(job_id: str) -> None:
     """Mark job as skipped."""

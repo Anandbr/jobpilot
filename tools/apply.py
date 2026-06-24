@@ -26,8 +26,8 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-from config.loader import get_candidate
-from tools.notifier import send_message, send_photo
+from config.loader import get_candidate, get_candidate_for_user
+from tools.notifier import send_message, send_photo, send_message_to
 from tools.database import update_job_status
 
 load_dotenv()
@@ -311,7 +311,7 @@ def detect_stuck(snapshot: str) -> dict:
     return {"stuck": False}
 
 
-def send_stuck_notification(job: dict, stuck_info: dict):
+def send_stuck_notification(job: dict, stuck_info: dict, chat_id: str = None):
     """
     Send Telegram notification with screenshot and noVNC link
     when agent is stuck and needs human help.
@@ -325,7 +325,7 @@ def send_stuck_notification(job: dict, stuck_info: dict):
     )
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
     base_url = f"https://api.telegram.org/bot{token}"
 
     keyboard = {
@@ -406,17 +406,26 @@ def fill_standard_fields(snapshot: str, candidate: dict,
                     human_delay(1, 3)
 
 
-def answer_screening_question(question: str, job: dict) -> str:
+def answer_screening_question(question: str, job: dict, user: dict = None) -> str:
     """
     Use Claude to answer a screening question honestly.
     Only called for open-ended questions that require judgment.
     Deterministic fields (name, email, etc.) never go through here.
     """
     from tools.claude_client import call_claude
-    from harness.skill_loader import load_candidate_context, load_extended_experience
+    from harness.skill_loader import (
+        load_candidate_context, 
+        load_extended_expereince,
+        load_candidate_context_for_user,
+        load_extended_experience_for_user
+    )
 
-    candidate_context = load_candidate_context()
-    extended = load_extended_experience()
+    if user:
+        candidate_context = load_candidate_context_for_user(user)
+        extended = load_extended_experience_for_user(user)
+    else:
+        candidate_context = load_candidate_context()
+        extended = load_extended_expereince()
 
     prompt = f"""You are helping a job candidate answer a screening question honestly.
 
@@ -447,7 +456,7 @@ Return only the answer text, nothing else."""
 # LINKEDIN EASY APPLY
 # ============================================================
 
-def handle_linkedin_easy_apply(job: dict, resume_path: str) -> bool:
+def handle_linkedin_easy_apply(job: dict, resume_path: str, chat_id: str = None) -> bool:
     """
     LinkedIn Easy Apply uses shadow DOM — cannot be automated.
     Send the LinkedIn URL to the user for manual apply on mobile.
@@ -463,7 +472,7 @@ def handle_linkedin_easy_apply(job: dict, resume_path: str) -> bool:
     )
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
     base_url = f"https://api.telegram.org/bot{token}"
 
     keyboard = {
@@ -557,9 +566,17 @@ def submit_application(job_id: str) -> bool:
 # MAIN APPLY FUNCTION
 # ============================================================
 
-def apply_to_job(job: dict, pdf_path: str) -> bool:
+def apply_to_job(job: dict, pdf_path: str,
+                 user: dict = None,
+                 chat_id: str = None) -> bool:
     """
     Main apply function. Orchestrates the full application flow.
+
+    Args:
+        job: job dict from DB
+        pdf_path: path to tailored resume PDF
+        user: user dict from DB — if None, uses owner profile
+        chat_id: Telegram chat_id to send notifications to
 
     Steps:
     1. Copy resume to OpenClaw media directory (local)
@@ -574,7 +591,13 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
     Does NOT submit. User must tap SUBMIT NOW in Telegram.
     Returns True if form was filled and screenshot sent.
     """
-    candidate = get_candidate()
+    if user:
+        candidate = get_candidate_for_user(user)
+    else:
+        candidate = get_candidate()
+    
+    # Use per user chat_id if available
+    notify_chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
     job_id = job["id"]
     job_title = job.get("title", "Unknown")
     job_company = job.get("company", "Unknown")
@@ -583,7 +606,7 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
         f"[APPLY] Starting | job={job_title} at {job_company} | "
         f"job_id={job_id[:8]}"
     )
-    send_message(
+    send_message_to(notify_chat_id,
         f"🤖 Starting application for "
         f"<b>{job_title}</b> at <b>{job_company}</b>..."
     )
@@ -606,11 +629,11 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
                 f"[APPLY] [{job_id[:8]}] LinkedIn Easy Apply — "
                 f"sending URL to user"
             )
-            send_message("📋 LinkedIn Easy Apply — sending link...")
+            send_message_to(notify_chat_id, "📋 LinkedIn Easy Apply — sending link...")
             if easy_apply_ref:
                 browser(f"click {easy_apply_ref}")
                 human_delay(3, 5)
-            return handle_linkedin_easy_apply(job, resume_path)
+            return handle_linkedin_easy_apply(job, resume_path, notify_chat_id)
 
         logger.info(
             f"[APPLY] [{job_id[:8]}] External ATS: {apply_url[:80]}"
@@ -627,7 +650,7 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
             logger.warning(
                 f"[APPLY] [{job_id[:8]}] Stuck | type={stuck['type']}"
             )
-            send_stuck_notification(job, stuck)
+            send_stuck_notification(job, stuck, notify_chat_id)
             return False
 
         # Step 6 — Fill standard fields
@@ -682,7 +705,7 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
                         f"[APPLY] [{job_id[:8]}] "
                         f"Answering: {question[:60]}..."
                     )
-                    answer = answer_screening_question(question, job)
+                    answer = answer_screening_question(question, job, user=user)
                     browser(f'type {ref} "{answer}"')
                     human_delay(3, 5)
 
@@ -717,7 +740,7 @@ def apply_to_job(job: dict, pdf_path: str) -> bool:
             f"[APPLY] Failed | job={job_title} at {job_company} | "
             f"job_id={job_id[:8]} | error={e}"
         )
-        send_message(
+        send_message_to(notify_chat_id,
             f"❌ Apply failed for <b>{job_title}</b> "
             f"at <b>{job_company}</b>\nError: {e}"
         )
