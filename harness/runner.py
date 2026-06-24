@@ -4,13 +4,12 @@ from datetime import datetime
 from tools.job_scraper import scan_for_new_jobs
 from tools.scorer import score_job, quick_keyword_filter
 from tools.tailor_resume import tailor_resume
-from tools.notifier import send_job_notification, send_pdf, send_daily_summary, send_message
+from tools.notifier import send_job_notification, send_pdf, send_message
 from tools.database import update_job_status, get_api_spend_today, get_connection
 from tools.registration import get_user_by_chat_id
 from config.loader import get_job_search, get_job_search_for_user, get_candidate_for_user
 import threading
 import logging
-import json
 import os
 
 logger = logging.getLogger(__name__)
