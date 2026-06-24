@@ -442,6 +442,11 @@ def start_callback_listener():
                         from tools.notifier import handle_message
                         handle_message(update["message"])
 
+        except requests.exceptions.ReadTimeout:
+            #Expected - Telegram long-poll timeout, just retry
+            logger.debug("[TELEGRAM] Poll timeout - retrying")
+            continue
+        
         except Exception as e:
             logger.error(f"[TELEGRAM LISTENER ERROR] {e}")
             time.sleep(5)
