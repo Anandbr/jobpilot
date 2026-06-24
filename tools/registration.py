@@ -189,17 +189,40 @@ def create_user(chat_id: str) -> dict:
     Sets registration_status='in_progress' and registration_step='name.
     Return the newly created user dict.
     """
+    import os
+
+    #Check user cap
+    max_users = int(os.getenv("MAX_USERS", "50"))
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total = cursor.fetchone()[0]
+    conn.close()
+
+    if total >= max_users:
+        logger.warning(
+            f"[REGISTRATION] User cap reached | "
+            f"total={total} | max={max_users} | chat_id={chat_id}"
+        )
+        return None
+    
     user_id = str(uuid.uuid4())
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO users (
-            id, telegram_chat_id, registration_status,
-            registration_step, created_at, updated_at
-        ) VALUES (?, ?, 'in_progress', 'name',
-                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
-    """, (user_id, str(chat_id)))
-    conn.commit()
+    try:
+        cursor.execute("""
+            INSERT INTO users (
+                id, telegram_chat_id, registration_status,
+                registration_step, created_at, updated_at
+            ) VALUES (?, ?, 'in_progress', 'name',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+        """, (user_id, str(chat_id)))
+        conn.commit()
+    except Exception as e:
+        # UNIQUE constraint violation — chat_id already exists
+        logger.warning(
+            f"[REGISTRATION] Duplicate chat_id | chat_id={chat_id}"
+        )
     conn.close()
 
     logger.info(f" [REGISTRATION] New user created | chat_id={chat_id} | user_id={user_id}")
@@ -385,6 +408,12 @@ def handle_registration_message(chat_id: str, text: str, document=None) -> str:
     #Brand new user - create them and send forst question
     if not user:
         user = create_user(chat_id)
+        if not user:
+            return (
+            "⚠️ JobPilot is currently at capacity.\n\n"
+            "We're not accepting new registrations right now. "
+            "Check back soon!"
+        )
         first_question = get_question_for_step("name")
         return first_question
     

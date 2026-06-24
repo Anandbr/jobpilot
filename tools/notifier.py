@@ -392,6 +392,25 @@ def handle_message(message: dict) -> None:
     
     elif text.startswith("/profile"):
         _handle_profile(chat_id)
+
+    elif text.startswith("/help"):
+        _handle_help(chat_id)
+    
+    elif text.startswith("/status"):
+        _handle_status(chat_id)
+    
+    elif text.startswith("/preferences"):
+        _handle_preferences(chat_id)
+    
+    elif pending.startswith("awaiting_pref_") and not text.startswith("/"):
+        pref_field = pending.replace("awaiting_pref_", "")
+        _handle_pref_value_received(chat_id, pref_field, text)
+        return
+    
+    # elif data.startswith("pref_update_"):
+    #     without_prefix = data.replace("pref_update_", "")
+    #     pref_field, target_chat_id = without_prefix.split("|", 1)
+    #     _handle_pref_update_selected(target_chat_id, pref_field)
     
     elif text.startswith("/skip"):
         # /skip during registration is handled in registration
@@ -893,6 +912,11 @@ def handle_callback(callback_query: dict) -> None:
             "For now — tap CONFIRM SUBMIT to proceed with "
             "the current tailored resume, or CANCEL to skip.")
 
+    elif data.startswith("pref_update_"):
+        without_prefix = data.replace("pref_update_", "")
+        pref_field, target_chat_id = without_prefix.split("|", 1)
+        _handle_pref_update_selected(target_chat_id, pref_field)
+
     elif data.startswith("cancel_"):
         job_id = data.replace("cancel_", "")
         from tools.database import update_job_status
@@ -1043,7 +1067,276 @@ def _handle_apply(job_id: str, chat_id: str) -> None:
         keyboard=keyboard
     )
 
+def _handle_help(chat_id: str) -> None:
+    """Show all available commands."""
+    send_message_to(
+        chat_id,
+        "🤖 <b>JobPilot Commands</b>\n\n"
+        "<b>Profile</b>\n"
+        "/profile — view your current profile\n"
+        "/profile-update — update any profile field\n"
+        "/experience-update — add work experience context\n"
+        "/experience-reset — wipe experience and start fresh\n\n"
+        "<b>API Key</b>\n"
+        "/set-api-key — add your Claude API key\n"
+        "/delete-api-key — remove your Claude API key\n\n"
+        "<b>Job Search</b>\n"
+        "/status — see your job match stats\n"
+        "/preferences — view/update job search preferences\n\n"
+        "<b>Other</b>\n"
+        "/help — show this message"
+    )
+
 def _handle_skip(job_id: str) -> None:
     """Mark job as skipped."""
     from tools.database import update_job_status
     update_job_status(job_id, "skipped")
+
+def _handle_status(chat_id: str) -> None:
+    """Show per-user job match stats."""
+    from tools.database import get_connection
+    from tools.registration import get_user_by_chat_id
+
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        send_message_to(chat_id, "❌ Profile not found.")
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Count jobs by status for this user
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'notified' THEN 1 ELSE 0 END) as notified,
+            SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END) as applied,
+            SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped,
+            SUM(CASE WHEN status = 'pending_manual' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN score >= 8 THEN 1 ELSE 0 END) as strong_matches
+        FROM jobs
+        WHERE user_id = ?
+    """, (user["id"],))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    total = row[0] or 0
+    notified = row[1] or 0
+    applied = row[2] or 0
+    skipped = row[3] or 0
+    pending = row[4] or 0
+    strong = row[5] or 0
+
+    free_used = user.get("free_scan_runs_used", 0)
+    free_cap = user.get("free_scan_runs_cap", 3)
+    has_key = bool(user.get("claude_api_key_encrypted"))
+
+    send_message_to(
+        chat_id,
+        f"📊 <b>Your JobPilot Stats</b>\n\n"
+        f"Jobs found: {total}\n"
+        f"Strong matches (8+): {strong}\n"
+        f"Notified: {notified}\n"
+        f"Applied: {applied}\n"
+        f"Pending manual: {pending}\n"
+        f"Skipped: {skipped}\n\n"
+        f"<b>Account</b>\n"
+        f"Claude API key: {'✅ Set' if has_key else '❌ Not set'}\n"
+        f"Free scans used: {free_used}/{free_cap}"
+    )
+
+def _handle_preferences(chat_id: str) -> None:
+    """Show current job search preferences with update buttons."""
+    from tools.registration import get_user_by_chat_id
+    from tools.database import get_job_preferences
+
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        send_message_to(chat_id, "❌ Profile not found.")
+        return
+
+    prefs = get_job_preferences(user["id"])
+
+    roles = ", ".join(prefs.get("target_roles", [])) or "None set"
+    locations = ", ".join(prefs.get("locations", [])) or "None set"
+    min_score = prefs.get("min_score", 7.0)
+    min_salary = prefs.get("min_salary", 0)
+    h1b = "Yes" if prefs.get("h1b_sponsorship_required") else "No"
+    exclude = ", ".join(prefs.get("exclude_keywords", [])) or "None"
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "🎯 Update Roles",
+                 "callback_data": f"pref_update_roles|{chat_id}"},
+                {"text": "📍 Update Locations",
+                 "callback_data": f"pref_update_locations|{chat_id}"}
+            ],
+            [
+                {"text": "⭐ Min Score",
+                 "callback_data": f"pref_update_min_score|{chat_id}"},
+                {"text": "💰 Min Salary",
+                 "callback_data": f"pref_update_min_salary|{chat_id}"}
+            ],
+            [
+                {"text": "🚫 Exclude Keywords",
+                 "callback_data": f"pref_update_exclude|{chat_id}"}
+            ]
+        ]
+    }
+
+    send_message_to(
+        chat_id,
+        f"⚙️ <b>Job Search Preferences</b>\n\n"
+        f"Target roles: {roles}\n"
+        f"Locations: {locations}\n"
+        f"Min match score: {min_score}/10\n"
+        f"Min salary: {'${:,}'.format(min_salary) if min_salary else 'No filter'}\n"
+        f"H1B sponsorship required: {h1b}\n"
+        f"Exclude keywords: {exclude}\n\n"
+        f"Tap a button to update:",
+        keyboard=keyboard
+    )
+
+def _handle_pref_update_selected(chat_id: str, pref_field: str) -> None:
+    """
+    User tapped a preference update button.
+    Set pending state and ask for new value.
+    """
+    from tools.database import get_connection
+
+    prompts = {
+        "roles": (
+            "What job titles are you targeting?\n\n"
+            "Send comma-separated:\n"
+            "e.g. AI Engineer, ML Engineer, Software Engineer"
+        ),
+        "locations": (
+            "Which locations are you open to?\n\n"
+            "Send comma-separated:\n"
+            "e.g. Remote, Seattle, San Francisco"
+        ),
+        "min_score": (
+            "What minimum match score? (1-10)\n\n"
+            "e.g. 7 means only show jobs scoring 7/10 or above\n"
+            "Default is 7.0"
+        ),
+        "min_salary": (
+            "What minimum salary? (numbers only, USD)\n\n"
+            "e.g. 150000\n"
+            "Send 0 for no filter"
+        ),
+        "exclude": (
+            "Which keywords should exclude a job?\n\n"
+            "Send comma-separated:\n"
+            "e.g. 10+ years, PhD required, clearance required\n\n"
+            "Send 'none' to clear all exclusions"
+        )
+    }
+
+    prompt = prompts.get(pref_field, f"New value for {pref_field}?")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET pending_confirmation = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE telegram_chat_id = ?
+    """, (f"awaiting_pref_{pref_field}", chat_id))
+    conn.commit()
+    conn.close()
+
+    logger.info(
+        f"[PREFERENCES] Awaiting input | "
+        f"chat_id={chat_id} | field={pref_field}"
+    )
+    send_message_to(chat_id, prompt)
+
+def _handle_pref_value_received(chat_id: str, pref_field: str,
+                                  text: str) -> None:
+    """Save updated preference value to job_preferences table."""
+    from tools.registration import get_user_by_chat_id
+    from tools.database import get_job_preferences, save_job_preferences, get_connection
+    import json
+
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        send_message_to(chat_id, "❌ User not found.")
+        return
+
+    prefs = get_job_preferences(user["id"])
+    value = text.strip()
+
+    if pref_field == "roles":
+        titles = [t.strip() for t in value.split(",") if t.strip()]
+        prefs["target_roles"] = titles
+        prefs["role_keywords"] = [t.lower() for t in titles]
+        confirm = f"Target roles updated to: {', '.join(titles)}"
+
+    elif pref_field == "locations":
+        locations = [l.strip() for l in value.split(",") if l.strip()]
+        prefs["locations"] = locations
+        confirm = f"Locations updated to: {', '.join(locations)}"
+
+    elif pref_field == "min_score":
+        try:
+            score = float(value)
+            if not 1 <= score <= 10:
+                send_message_to(chat_id, "Score must be between 1 and 10.")
+                return
+            prefs["min_score"] = score
+            confirm = f"Min score updated to {score}/10"
+        except ValueError:
+            send_message_to(chat_id, "Please send a number like 7 or 7.5")
+            return
+
+    elif pref_field == "min_salary":
+        try:
+            salary = int(value)
+            prefs["min_salary"] = salary
+            confirm = (
+                f"Min salary updated to "
+                f"{'${:,}'.format(salary) if salary else 'no filter'}"
+            )
+        except ValueError:
+            send_message_to(chat_id, "Please send a number like 150000 or 0")
+            return
+
+    elif pref_field == "exclude":
+        if value.lower() == "none":
+            prefs["exclude_keywords"] = []
+            confirm = "Exclude keywords cleared."
+        else:
+            keywords = [k.strip().lower() for k in value.split(",") if k.strip()]
+            prefs["exclude_keywords"] = keywords
+            confirm = f"Exclude keywords updated to: {', '.join(keywords)}"
+
+    else:
+        send_message_to(chat_id, "Unknown preference field.")
+        return
+
+    # Save updated prefs
+    save_job_preferences(user["id"], prefs)
+
+    # Clear pending state
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET pending_confirmation = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE telegram_chat_id = ?
+    """, (chat_id,))
+    conn.commit()
+    conn.close()
+
+    logger.info(
+        f"[PREFERENCES] Updated | chat_id={chat_id} | field={pref_field}"
+    )
+    send_message_to(
+        chat_id,
+        f"✅ {confirm}\n\n"
+        f"Use /preferences to review all settings."
+    )

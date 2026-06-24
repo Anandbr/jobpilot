@@ -328,38 +328,62 @@ def run_scan():
         send_message(f"⚠️ JobPilot scan error: {e}")       
 
 def send_evening_summary():
-    """Send daily summary at 8pm."""
+    """Send daily summary to each registered user."""
     from tools.database import get_connection
-    import sqlite3
+    from tools.notifier import send_daily_summary
 
     conn = get_connection()
+    conn.row_factory = __import__('sqlite3').Row
     cursor = conn.cursor()
 
-    # Get today's stats
+    # Get all registered users
     cursor.execute("""
-        SELECT 
-            COUNT(*) as scanned,
-            SUM(CASE WHEN score >= 7 THEN 1 ELSE 0 END) as high_matches,
-            SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END) as applied,
-            SUM(CASE WHEN status = 'skipped' THEN 1 else 0 END) as skipped
-        FROM jobs
-        WHERE date(discovered_at) = date('now')
+        SELECT * FROM users WHERE registration_status = 'complete'
     """)
-
-    row = cursor.fetchone()
+    users = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
-    spend = get_api_spend_today()
 
-    stats = {
-        "scanned": row[0] or 0,
-        "high_matches": row[1] or 0,
-        "applied": row[2] or 0,
-        "skipped": row[3] or 0,
-        "api_spend": spend
-    }
+    for user in users:
+        chat_id = user["telegram_chat_id"]
+        user_id = user["id"]
 
-    send_daily_summary(stats)
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Get today's stats
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as scanned,
+                SUM(CASE WHEN score >= 7 THEN 1 ELSE 0 END) as high_matches,
+                SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END) as applied,
+                SUM(CASE WHEN status = 'skipped' THEN 1 else 0 END) as skipped
+            FROM jobs
+            WHERE user_id = ? AND date(discovered_at) = date('now')
+        """, (user_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        spend = get_api_spend_today()
+
+        stats = {
+            "scanned": row[0] or 0,
+            "high_matches": row[1] or 0,
+            "applied": row[2] or 0,
+            "skipped": row[3] or 0,
+            "api_spend": spend
+        }
+
+        send_daily_summary(
+            chat_id=chat_id,
+            stats=stats,
+            user_name=user.get("name", "").split()[0]
+        )
+
+        logger.info(
+            f"[SUMMARY] Sent | chat_id={chat_id} | "
+            f"user={user.get('name')}"
+        )
 
 def start(run_once: bool = False):
     """
@@ -446,7 +470,7 @@ def start_callback_listener():
             #Expected - Telegram long-poll timeout, just retry
             logger.debug("[TELEGRAM] Poll timeout - retrying")
             continue
-        
+
         except Exception as e:
             logger.error(f"[TELEGRAM LISTENER ERROR] {e}")
             time.sleep(5)
