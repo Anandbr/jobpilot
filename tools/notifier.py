@@ -375,19 +375,19 @@ def handle_message(message: dict) -> None:
         return
 
     # REGISTERED -> handle commands
-    if text.startswith("/experience-update"):
+    if text.startswith("/experience_update"):
         _handle_experience_update(chat_id, text)
     
-    elif text.startswith("/experience-reset"):
+    elif text.startswith("/experience_reset"):
         _handle_experience_reset_request(chat_id)
     
-    elif text.startswith("/set-api-key"):
+    elif text.startswith("/set_api_key"):
         _handle_set_api_key_request(chat_id)
     
-    elif text.startswith("/delete-api-key"):
+    elif text.startswith("/delete_api_key"):
         _handle_delete_api_key(chat_id)
 
-    elif text.startswith("/profile-update"):
+    elif text.startswith("/profile_update"):
         _handle_profile_update(chat_id)
     
     elif text.startswith("/profile"):
@@ -426,13 +426,13 @@ def handle_message(message: dict) -> None:
 def _handle_experience_update(chat_id: str, text: str) -> None:
     """ Append to user's extended_experience field. """
     #Strip the command prefix to get just the content
-    content = text.replace("/experience-update", "").strip()
+    content = text.replace("/experience_update", "").strip()
 
     if not content:
         send_message_to(
             chat_id,
             "Tell me what to add to your experience - send it "
-            "as: \n\n /experience-update <your experience here>"
+            "as: \n\n /experience_update <your experience here>"
         )
         return
     
@@ -482,7 +482,7 @@ def _handle_experience_reset_request(chat_id: str) -> None:
         chat_id,
         "⚠️ <b>Are you sure?</b>\n\n"
         "This will permanently delete all your extended "
-        "experience — everything added via /experience-update.\n\n"
+        "experience — everything added via /experience_update.\n\n"
         "Your basic profile (name, email, resume) is not affected.",
         keyboard=keyboard
     )
@@ -539,12 +539,12 @@ def _handle_delete_api_key(chat_id: str) -> None:
     if remaining > 0:
         free_tier_msg = (
             f"You have {remaining} free scan run(s) remaining.\n"
-            f"Use /set-api-key to add a new key anytime."
+            f"Use /set_api_key to add a new key anytime."
         )
     else:
         free_tier_msg = (
             "You've used all your free scan runs.\n"
-            "Use /set-api-key to add a new key to continue."
+            "Use /set_api_key to add a new key to continue."
         )
 
     send_message_to(
@@ -566,7 +566,7 @@ def _handle_api_key_submission(chat_id: str, api_key: str) -> None:
             chat_id,
             "That doesn't look like a valid Anthropic API key.\n\n"
             "Keys start with 'sk-ant-'. Try again or use "
-            "/set-api-key to restart."
+            "/set_api_key to restart."
         )
         return
 
@@ -590,7 +590,7 @@ def _handle_api_key_submission(chat_id: str, api_key: str) -> None:
         "✅ API key saved and encrypted.\n\n"
         "All your job scans and resume tailoring will now "
         "use your own Claude account.\n\n"
-        "Use /delete-api-key to remove it anytime."
+        "Use /delete_api_key to remove it anytime."
     )
 
 def _handle_profile(chat_id: str) -> None:
@@ -626,7 +626,7 @@ def _handle_profile(chat_id: str) -> None:
 def _handle_profile_update(chat_id: str) -> None:
     """
     Show profile field selection button.
-    Called on /profile-update command or "Yes, update more" tap.
+    Called on /profile_update command or "Yes, update more" tap.
     """
     keyboard = {
         "inline_keyboard": [
@@ -854,7 +854,7 @@ def handle_callback(callback_query: dict) -> None:
         conn.close()
         logger.info(f"[EXPERIENCE] Reset | chat_id={target_chat_id}")
         send_message_to(target_chat_id,
-            "✅ Experience reset. Start fresh with /experience-update")
+            "✅ Experience reset. Start fresh with /experience_update")
 
     elif data.startswith("cancel_experience_reset_"):
         target_chat_id = data.replace("cancel_experience_reset_", "")
@@ -1074,12 +1074,12 @@ def _handle_help(chat_id: str) -> None:
         "🤖 <b>JobPilot Commands</b>\n\n"
         "<b>Profile</b>\n"
         "/profile — view your current profile\n"
-        "/profile-update — update any profile field\n"
-        "/experience-update — add work experience context\n"
-        "/experience-reset — wipe experience and start fresh\n\n"
+        "/profile_update — update any profile field\n"
+        "/experienceupdate — add work experience context\n"
+        "/experience_reset — wipe experience and start fresh\n\n"
         "<b>API Key</b>\n"
-        "/set-api-key — add your Claude API key\n"
-        "/delete-api-key — remove your Claude API key\n\n"
+        "/set_api_key — add your Claude API key\n"
+        "/delete_api_key — remove your Claude API key\n\n"
         "<b>Job Search</b>\n"
         "/status — see your job match stats\n"
         "/preferences — view/update job search preferences\n\n"

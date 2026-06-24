@@ -296,7 +296,7 @@ def run_scan():
                         chat_id,
                         "⚠️ <b>Last free scan</b>\n\n"
                         "This was your second-to-last free scan run.\n"
-                        "Add your Claude API key with /set-api-key "
+                        "Add your Claude API key with /set_api_key "
                         "to keep getting job matches."
                     )
                 elif remaining == 0:
@@ -305,7 +305,7 @@ def run_scan():
                         chat_id,
                         "🔒 <b>Free tier used up</b>\n\n"
                         "You've used all 3 free scan runs.\n"
-                        "Add your Claude API key with /set-api-key "
+                        "Add your Claude API key with /set_api_key "
                         "to continue getting job matches.\n\n"
                         "Get a key at: https://console.anthropic.com"
                     )

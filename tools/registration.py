@@ -545,8 +545,8 @@ def _completion_message() -> str:
         "✅ You're all set!\n\n"
         "I'll start watching for matching jobs based on your profile.\n\n"
         "A few things you can do:\n"
-        "• /experience-update — add more context about your work\n"
-        "• /set-api-key — bring your own Claude API key for unlimited use\n"
+        "• /experience_update — add more context about your work\n"
+        "• /set_api_key — bring your own Claude API key for unlimited use\n"
         "• /profile — see what I have on file\n\n"
         "I'll notify you when I find strong matches. Good luck! 🚀"
     )
