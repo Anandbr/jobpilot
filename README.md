@@ -1,4 +1,4 @@
-# JobPilot 🚀
+# JobPilot 
 
 An autonomous AI job application agent that finds, scores, tailors, and helps you apply to jobs — while you focus on interviews.
 
